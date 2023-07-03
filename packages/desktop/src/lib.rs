@@ -24,13 +24,13 @@ pub use desktop_context::{
 };
 use desktop_context::{EventData, UserWindowEvent, WebviewQueue, WindowEventHandlers};
 use dioxus_core::*;
-use dioxus_html::MountedData;
 use dioxus_html::{native_bind::NativeFileEngine, FormData, HtmlEvent};
+use dioxus_html::{MountedData, ShortcutProvider};
 use element::DesktopElement;
 pub use eval::{use_eval, EvalResult};
 use futures_util::{pin_mut, FutureExt};
+pub use shortcut::ShortcutId;
 use shortcut::ShortcutRegistry;
-pub use shortcut::{use_global_shortcut, ShortcutHandle, ShortcutId, ShortcutRegistryError};
 use std::rc::Rc;
 use std::task::Waker;
 use std::{collections::HashMap, sync::Arc};
@@ -354,10 +354,13 @@ fn create_new_window(
         event_loop.clone(),
         queue.clone(),
         event_handlers.clone(),
-        shortcut_manager,
+        shortcut_manager.clone(),
     ));
 
     dom.base_scope().provide_context(desktop_context.clone());
+    // insert global shortcut manager context
+    dom.base_scope()
+        .provide_context(Rc::new(shortcut_manager) as Rc<dyn ShortcutProvider>);
 
     let id = desktop_context.webview.window().id();
 

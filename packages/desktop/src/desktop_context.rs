@@ -8,13 +8,13 @@ use crate::events::IpcMessage;
 use crate::query::QueryEngine;
 use crate::shortcut::ShortcutId;
 use crate::shortcut::ShortcutRegistry;
-use crate::shortcut::ShortcutRegistryError;
 use crate::Config;
 use crate::WebviewHandler;
 use dioxus_core::ScopeState;
 use dioxus_core::VirtualDom;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 use dioxus_hot_reload::HotReloadMsg;
+use dioxus_html::ShortcutRegistryError;
 use slab::Slab;
 use wry::application::accelerator::Accelerator;
 use wry::application::event::Event;

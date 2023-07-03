@@ -29,6 +29,9 @@ mod web_sys_bind;
 #[cfg(feature = "serialize")]
 mod transit;
 
+mod shortcut;
+pub use shortcut::*;
+
 #[cfg(feature = "serialize")]
 pub use transit::*;
 

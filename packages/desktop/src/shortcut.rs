@@ -1,24 +1,23 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, str::FromStr};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use dioxus_core::ScopeState;
-use dioxus_html::input_data::keyboard_types::Modifiers;
+use dioxus_html::{
+    input_data::keyboard_types::{Code, Modifiers},
+    ShortcutProvider, ShortcutRegistryError,
+};
 use slab::Slab;
 use wry::application::{
     accelerator::{Accelerator, AcceleratorId},
     event_loop::EventLoopWindowTarget,
-    global_shortcut::{GlobalShortcut, ShortcutManager, ShortcutManagerError},
+    global_shortcut::{GlobalShortcut, ShortcutManager},
     keyboard::{KeyCode, ModifiersState},
 };
 
-use crate::{desktop_context::DesktopContext, use_window};
-
-#[derive(Clone)]
-pub(crate) struct ShortcutRegistry {
-    manager: Rc<RefCell<ShortcutManager>>,
-    shortcuts: ShortcutMap,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// An global id for a shortcut.
+pub struct ShortcutId {
+    id: AcceleratorId,
+    number: usize,
 }
-
-type ShortcutMap = Rc<RefCell<HashMap<AcceleratorId, Shortcut>>>;
 
 struct Shortcut {
     shortcut: GlobalShortcut,
@@ -37,6 +36,14 @@ impl Shortcut {
     fn is_empty(&self) -> bool {
         self.callbacks.is_empty()
     }
+}
+
+type ShortcutMap = Rc<RefCell<HashMap<AcceleratorId, Shortcut>>>;
+
+#[derive(Clone)]
+pub(crate) struct ShortcutRegistry {
+    manager: Rc<RefCell<ShortcutManager>>,
+    shortcuts: ShortcutMap,
 }
 
 impl ShortcutRegistry {
@@ -84,9 +91,6 @@ impl ShortcutRegistry {
                             number: id,
                         }
                     }
-                    Err(ShortcutManagerError::InvalidAccelerator(shortcut)) => {
-                        return Err(ShortcutRegistryError::InvalidShortcut(shortcut))
-                    }
                     Err(err) => return Err(ShortcutRegistryError::Other(Box::new(err))),
                 }
             },
@@ -112,229 +116,142 @@ impl ShortcutRegistry {
     }
 }
 
-#[non_exhaustive]
-#[derive(Debug)]
-/// An error that can occur when registering a shortcut.
-pub enum ShortcutRegistryError {
-    /// The shortcut is invalid.
-    InvalidShortcut(String),
-    /// An unknown error occurred.
-    Other(Box<dyn std::error::Error>),
+impl ShortcutProvider for ShortcutRegistry {
+    fn new_shortcut(
+        &self,
+        _cx: &dioxus_core::ScopeState,
+        accelerator: dioxus_html::Accelerator,
+        handler: Box<dyn FnMut() + 'static>,
+    ) -> Result<Box<dyn dioxus_html::Shortcut>, ShortcutRegistryError> {
+        let key_code = into_key_code(accelerator.key);
+        let mut modifiers = ModifiersState::empty();
+        if accelerator.modifiers.contains(Modifiers::ALT) {
+            modifiers |= ModifiersState::ALT;
+        }
+        if accelerator.modifiers.contains(Modifiers::CONTROL) {
+            modifiers |= ModifiersState::CONTROL;
+        }
+        if accelerator.modifiers.contains(Modifiers::SHIFT) {
+            modifiers |= ModifiersState::SHIFT;
+        }
+        if accelerator.modifiers.contains(Modifiers::SUPER) {
+            modifiers |= ModifiersState::SUPER;
+        }
+        let accelerator = Accelerator::new(modifiers, key_code);
+        let id = self.add_shortcut(accelerator, handler)?;
+        Ok(Box::new(DesktopShortcut {
+            id,
+            manager: self.clone(),
+        }))
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// An global id for a shortcut.
-pub struct ShortcutId {
-    id: AcceleratorId,
-    number: usize,
+struct DesktopShortcut {
+    id: ShortcutId,
+    manager: ShortcutRegistry,
 }
 
-/// A global shortcut. This will be automatically removed when it is dropped.
-pub struct ShortcutHandle {
-    desktop: DesktopContext,
-    /// The id of the shortcut
-    pub shortcut_id: ShortcutId,
-}
-
-pub trait IntoAccelerator {
-    fn accelerator(&self) -> Accelerator;
-}
-
-impl IntoAccelerator for (dioxus_html::KeyCode, ModifiersState) {
-    fn accelerator(&self) -> Accelerator {
-        Accelerator::new(Some(self.1), self.0.into_key_code())
+impl dioxus_html::Shortcut for DesktopShortcut {
+    fn remove(&mut self) {
+        self.manager.remove_shortcut(self.id);
     }
 }
 
-impl IntoAccelerator for (ModifiersState, dioxus_html::KeyCode) {
-    fn accelerator(&self) -> Accelerator {
-        Accelerator::new(Some(self.0), self.1.into_key_code())
-    }
-}
-
-impl IntoAccelerator for dioxus_html::KeyCode {
-    fn accelerator(&self) -> Accelerator {
-        Accelerator::new(None, self.into_key_code())
-    }
-}
-
-impl IntoAccelerator for &str {
-    fn accelerator(&self) -> Accelerator {
-        Accelerator::from_str(self).unwrap()
-    }
-}
-
-/// Get a closure that executes any JavaScript in the WebView context.
-pub fn use_global_shortcut(
-    cx: &ScopeState,
-    accelerator: impl IntoAccelerator,
-    handler: impl FnMut() + 'static,
-) -> &Result<ShortcutHandle, ShortcutRegistryError> {
-    let desktop = use_window(cx);
-    cx.use_hook(move || {
-        let desktop = desktop.clone();
-
-        let id = desktop.create_shortcut(accelerator.accelerator(), handler);
-
-        Ok(ShortcutHandle {
-            desktop,
-            shortcut_id: id?,
-        })
-    })
-}
-
-impl ShortcutHandle {
-    /// Remove the shortcut.
-    pub fn remove(&self) {
-        self.desktop.remove_shortcut(self.shortcut_id);
-    }
-}
-
-impl Drop for ShortcutHandle {
-    fn drop(&mut self) {
-        self.remove()
-    }
-}
-
-pub trait IntoModifersState {
-    fn into_modifiers_state(self) -> ModifiersState;
-}
-
-impl IntoModifersState for ModifiersState {
-    fn into_modifiers_state(self) -> ModifiersState {
-        self
-    }
-}
-
-impl IntoModifersState for Modifiers {
-    fn into_modifiers_state(self) -> ModifiersState {
-        let mut state = ModifiersState::empty();
-        if self.contains(Modifiers::SHIFT) {
-            state |= ModifiersState::SHIFT
-        }
-        if self.contains(Modifiers::CONTROL) {
-            state |= ModifiersState::CONTROL
-        }
-        if self.contains(Modifiers::ALT) {
-            state |= ModifiersState::ALT
-        }
-        if self.contains(Modifiers::META) || self.contains(Modifiers::SUPER) {
-            state |= ModifiersState::SUPER
-        }
-        state
-    }
-}
-
-pub trait IntoKeyCode {
-    fn into_key_code(self) -> KeyCode;
-}
-
-impl IntoKeyCode for KeyCode {
-    fn into_key_code(self) -> KeyCode {
-        self
-    }
-}
-
-impl IntoKeyCode for dioxus_html::KeyCode {
-    fn into_key_code(self) -> KeyCode {
-        match self {
-            dioxus_html::KeyCode::Backspace => KeyCode::Backspace,
-            dioxus_html::KeyCode::Tab => KeyCode::Tab,
-            dioxus_html::KeyCode::Clear => KeyCode::NumpadClear,
-            dioxus_html::KeyCode::Enter => KeyCode::Enter,
-            dioxus_html::KeyCode::Shift => KeyCode::ShiftLeft,
-            dioxus_html::KeyCode::Ctrl => KeyCode::ControlLeft,
-            dioxus_html::KeyCode::Alt => KeyCode::AltLeft,
-            dioxus_html::KeyCode::Pause => KeyCode::Pause,
-            dioxus_html::KeyCode::CapsLock => KeyCode::CapsLock,
-            dioxus_html::KeyCode::Escape => KeyCode::Escape,
-            dioxus_html::KeyCode::Space => KeyCode::Space,
-            dioxus_html::KeyCode::PageUp => KeyCode::PageUp,
-            dioxus_html::KeyCode::PageDown => KeyCode::PageDown,
-            dioxus_html::KeyCode::End => KeyCode::End,
-            dioxus_html::KeyCode::Home => KeyCode::Home,
-            dioxus_html::KeyCode::LeftArrow => KeyCode::ArrowLeft,
-            dioxus_html::KeyCode::UpArrow => KeyCode::ArrowUp,
-            dioxus_html::KeyCode::RightArrow => KeyCode::ArrowRight,
-            dioxus_html::KeyCode::DownArrow => KeyCode::ArrowDown,
-            dioxus_html::KeyCode::Insert => KeyCode::Insert,
-            dioxus_html::KeyCode::Delete => KeyCode::Delete,
-            dioxus_html::KeyCode::Num0 => KeyCode::Numpad0,
-            dioxus_html::KeyCode::Num1 => KeyCode::Numpad1,
-            dioxus_html::KeyCode::Num2 => KeyCode::Numpad2,
-            dioxus_html::KeyCode::Num3 => KeyCode::Numpad3,
-            dioxus_html::KeyCode::Num4 => KeyCode::Numpad4,
-            dioxus_html::KeyCode::Num5 => KeyCode::Numpad5,
-            dioxus_html::KeyCode::Num6 => KeyCode::Numpad6,
-            dioxus_html::KeyCode::Num7 => KeyCode::Numpad7,
-            dioxus_html::KeyCode::Num8 => KeyCode::Numpad8,
-            dioxus_html::KeyCode::Num9 => KeyCode::Numpad9,
-            dioxus_html::KeyCode::A => KeyCode::KeyA,
-            dioxus_html::KeyCode::B => KeyCode::KeyB,
-            dioxus_html::KeyCode::C => KeyCode::KeyC,
-            dioxus_html::KeyCode::D => KeyCode::KeyD,
-            dioxus_html::KeyCode::E => KeyCode::KeyE,
-            dioxus_html::KeyCode::F => KeyCode::KeyF,
-            dioxus_html::KeyCode::G => KeyCode::KeyG,
-            dioxus_html::KeyCode::H => KeyCode::KeyH,
-            dioxus_html::KeyCode::I => KeyCode::KeyI,
-            dioxus_html::KeyCode::J => KeyCode::KeyJ,
-            dioxus_html::KeyCode::K => KeyCode::KeyK,
-            dioxus_html::KeyCode::L => KeyCode::KeyL,
-            dioxus_html::KeyCode::M => KeyCode::KeyM,
-            dioxus_html::KeyCode::N => KeyCode::KeyN,
-            dioxus_html::KeyCode::O => KeyCode::KeyO,
-            dioxus_html::KeyCode::P => KeyCode::KeyP,
-            dioxus_html::KeyCode::Q => KeyCode::KeyQ,
-            dioxus_html::KeyCode::R => KeyCode::KeyR,
-            dioxus_html::KeyCode::S => KeyCode::KeyS,
-            dioxus_html::KeyCode::T => KeyCode::KeyT,
-            dioxus_html::KeyCode::U => KeyCode::KeyU,
-            dioxus_html::KeyCode::V => KeyCode::KeyV,
-            dioxus_html::KeyCode::W => KeyCode::KeyW,
-            dioxus_html::KeyCode::X => KeyCode::KeyX,
-            dioxus_html::KeyCode::Y => KeyCode::KeyY,
-            dioxus_html::KeyCode::Z => KeyCode::KeyZ,
-            dioxus_html::KeyCode::Numpad0 => KeyCode::Numpad0,
-            dioxus_html::KeyCode::Numpad1 => KeyCode::Numpad1,
-            dioxus_html::KeyCode::Numpad2 => KeyCode::Numpad2,
-            dioxus_html::KeyCode::Numpad3 => KeyCode::Numpad3,
-            dioxus_html::KeyCode::Numpad4 => KeyCode::Numpad4,
-            dioxus_html::KeyCode::Numpad5 => KeyCode::Numpad5,
-            dioxus_html::KeyCode::Numpad6 => KeyCode::Numpad6,
-            dioxus_html::KeyCode::Numpad7 => KeyCode::Numpad7,
-            dioxus_html::KeyCode::Numpad8 => KeyCode::Numpad8,
-            dioxus_html::KeyCode::Numpad9 => KeyCode::Numpad9,
-            dioxus_html::KeyCode::Multiply => KeyCode::NumpadMultiply,
-            dioxus_html::KeyCode::Add => KeyCode::NumpadAdd,
-            dioxus_html::KeyCode::Subtract => KeyCode::NumpadSubtract,
-            dioxus_html::KeyCode::DecimalPoint => KeyCode::NumpadDecimal,
-            dioxus_html::KeyCode::Divide => KeyCode::NumpadDivide,
-            dioxus_html::KeyCode::F1 => KeyCode::F1,
-            dioxus_html::KeyCode::F2 => KeyCode::F2,
-            dioxus_html::KeyCode::F3 => KeyCode::F3,
-            dioxus_html::KeyCode::F4 => KeyCode::F4,
-            dioxus_html::KeyCode::F5 => KeyCode::F5,
-            dioxus_html::KeyCode::F6 => KeyCode::F6,
-            dioxus_html::KeyCode::F7 => KeyCode::F7,
-            dioxus_html::KeyCode::F8 => KeyCode::F8,
-            dioxus_html::KeyCode::F9 => KeyCode::F9,
-            dioxus_html::KeyCode::F10 => KeyCode::F10,
-            dioxus_html::KeyCode::F11 => KeyCode::F11,
-            dioxus_html::KeyCode::F12 => KeyCode::F12,
-            dioxus_html::KeyCode::NumLock => KeyCode::NumLock,
-            dioxus_html::KeyCode::ScrollLock => KeyCode::ScrollLock,
-            dioxus_html::KeyCode::Semicolon => KeyCode::Semicolon,
-            dioxus_html::KeyCode::EqualSign => KeyCode::Equal,
-            dioxus_html::KeyCode::Comma => KeyCode::Comma,
-            dioxus_html::KeyCode::Period => KeyCode::Period,
-            dioxus_html::KeyCode::ForwardSlash => KeyCode::Slash,
-            dioxus_html::KeyCode::GraveAccent => KeyCode::Backquote,
-            dioxus_html::KeyCode::OpenBracket => KeyCode::BracketLeft,
-            dioxus_html::KeyCode::BackSlash => KeyCode::Backslash,
-            dioxus_html::KeyCode::CloseBraket => KeyCode::BracketRight,
-            dioxus_html::KeyCode::SingleQuote => KeyCode::Quote,
+fn into_key_code(code: Code) -> KeyCode {
+    match code {
+Code::Backspace => KeyCode::Backspace,
+Code::Tab => KeyCode::Tab,
+Code::NumpadClear => KeyCode::NumpadClear,
+Code::Enter => KeyCode::Enter,
+Code::ShiftLeft  => KeyCode::ShiftLeft,
+Code::ShiftRight  => KeyCode::ShiftRight,
+Code::ControlLeft  => KeyCode::ControlLeft,
+Code::ControlRight  => KeyCode::ControlRight,
+Code::AltLeft  => KeyCode::AltLeft,
+Code::AltRight  => KeyCode::AltRight,
+Code::Pause => KeyCode::Pause,
+Code::CapsLock => KeyCode::CapsLock,
+Code::Escape => KeyCode::Escape,
+Code::Space => KeyCode::Space,
+Code::PageUp => KeyCode::PageUp,
+Code::PageDown => KeyCode::PageDown,
+Code::End => KeyCode::End,
+Code::Home => KeyCode::Home,
+Code::ArrowLeft => KeyCode::ArrowLeft,
+Code::ArrowUp => KeyCode::ArrowUp,
+Code::ArrowRight => KeyCode::ArrowRight,
+Code::ArrowDown => KeyCode::ArrowDown,
+Code::Insert => KeyCode::Insert,
+Code::Delete => KeyCode::Delete,
+Code::Numpad0 => KeyCode::Numpad0,
+Code::Numpad1 => KeyCode::Numpad1,
+Code::Numpad2 => KeyCode::Numpad2,
+Code::Numpad3 => KeyCode::Numpad3,
+Code::Numpad4 => KeyCode::Numpad4,
+Code::Numpad5 => KeyCode::Numpad5,
+Code::Numpad6 => KeyCode::Numpad6,
+Code::Numpad7 => KeyCode::Numpad7,
+Code::Numpad8 => KeyCode::Numpad8,
+Code::Numpad9 => KeyCode::Numpad9,
+Code::KeyA => KeyCode::KeyA,
+Code::KeyB => KeyCode::KeyB,
+Code::KeyC => KeyCode::KeyC,
+Code::KeyD => KeyCode::KeyD,
+Code::KeyE => KeyCode::KeyE,
+Code::KeyF => KeyCode::KeyF,
+Code::KeyG => KeyCode::KeyG,
+Code::KeyH => KeyCode::KeyH,
+Code::KeyI => KeyCode::KeyI,
+Code::KeyJ => KeyCode::KeyJ,
+Code::KeyK => KeyCode::KeyK,
+Code::KeyL => KeyCode::KeyL,
+Code::KeyM => KeyCode::KeyM,
+Code::KeyN => KeyCode::KeyN,
+Code::KeyO => KeyCode::KeyO,
+Code::KeyP => KeyCode::KeyP,
+Code::KeyQ => KeyCode::KeyQ,
+Code::KeyR => KeyCode::KeyR,
+Code::KeyS => KeyCode::KeyS,
+Code::KeyT => KeyCode::KeyT,
+Code::KeyU => KeyCode::KeyU,
+Code::KeyV => KeyCode::KeyV,
+Code::KeyW => KeyCode::KeyW,
+Code::KeyX => KeyCode::KeyX,
+Code::KeyY => KeyCode::KeyY,
+Code::KeyZ => KeyCode::KeyZ,
+Code::NumpadMultiply => KeyCode::NumpadMultiply,
+Code::NumpadAdd => KeyCode::NumpadAdd,
+Code::NumpadSubtract => KeyCode::NumpadSubtract,
+Code::NumpadDecimal => KeyCode::NumpadDecimal,
+Code::NumpadDivide => KeyCode::NumpadDivide,
+Code::F1 => KeyCode::F1,
+Code::F2 => KeyCode::F2,
+Code::F3 => KeyCode::F3,
+Code::F4 => KeyCode::F4,
+Code::F5 => KeyCode::F5,
+Code::F6 => KeyCode::F6,
+Code::F7 => KeyCode::F7,
+Code::F8 => KeyCode::F8,
+Code::F9 => KeyCode::F9,
+Code::F10 => KeyCode::F10,
+Code::F11 => KeyCode::F11,
+Code::F12 => KeyCode::F12,
+Code::NumLock => KeyCode::NumLock,
+Code::ScrollLock => KeyCode::ScrollLock,
+Code::Semicolon => KeyCode::Semicolon,
+Code::NumpadEqual => KeyCode::Equal,
+Code::Comma => KeyCode::Comma,
+Code::Period => KeyCode::Period,
+Code::Slash => KeyCode::Slash,
+Code::Backquote => KeyCode::Backquote,
+Code::BracketLeft => KeyCode::BracketLeft,
+Code::Backslash => KeyCode::Backslash,
+Code::BracketRight => KeyCode::BracketRight,
+Code::Quote => KeyCode::Quote,
+Code::IntlBackslash => KeyCode::IntlBackslash,
+Code::Power => KeyCode::Power,
+Code::NumpadEnter => KeyCode::NumpadEnter,
             key => panic!("Failed to convert {:?} to tao::keyboard::KeyCode, try using tao::keyboard::KeyCode directly", key),
         }
-    }
 }
