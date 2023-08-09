@@ -1,5 +1,5 @@
 use crate::{
-    innerlude::Scoped,
+    innerlude::{EventHandler, Scoped},
     nodes::RenderReturn,
     scopes::{Scope, ScopeState},
     Element,
@@ -16,6 +16,15 @@ pub(crate) unsafe trait AnyProps<'a> {
     fn render(&'a self, bump: &'a ScopeState) -> RenderReturn<'a>;
     unsafe fn memoize(&self, other: &dyn AnyProps) -> bool;
 }
+
+/// A trait that ensures that a type is safe to use as props
+pub unsafe trait PropSafe<T = ()> {}
+
+unsafe impl<T: 'static> PropSafe for &T {}
+
+unsafe impl PropSafe for Element<'_> {}
+
+unsafe impl PropSafe for EventHandler<'_> {}
 
 pub(crate) struct VProps<'a, P> {
     pub render_fn: fn(Scope<'a, P>) -> Element<'a>,

@@ -12,6 +12,7 @@ use syn::parse::Error;
 use syn::spanned::Spanned;
 
 use quote::quote;
+use syn::visit::Visit;
 
 pub fn impl_my_derive(ast: &syn::DeriveInput) -> Result<TokenStream, Error> {
     let data = match &ast.data {
@@ -464,13 +465,15 @@ mod struct_info {
     use quote::quote;
     use syn::parse::Error;
     use syn::punctuated::Punctuated;
-    use syn::Expr;
+    use syn::visit::Visit;
+    use syn::{parse_quote, Expr};
 
     use super::field_info::{FieldBuilderAttr, FieldInfo};
     use super::util::{
         empty_type, empty_type_tuple, expr_to_single_string, make_punctuated_single,
         modify_types_generics_hack, path_to_single_string, strip_raw_ident_prefix, type_tuple,
     };
+    use super::HasLifetimeVisitor;
 
     #[derive(Debug)]
     pub struct StructInfo<'a> {
@@ -616,6 +619,7 @@ Finally, call `.build()` to create the instance of `{name}`.
                     .predicates
                     .extend(predicates.predicates.clone());
             }
+            let mut prop_safe_predicates = b_generics_where_extras_predicates.cloned();
 
             let can_memoize = match are_there_generics {
                 true => quote! { false  },
@@ -626,6 +630,25 @@ Finally, call `.build()` to create the instance of `{name}`.
                 true => quote! { false  },
                 false => quote! { true },
             };
+
+            for field in self.fields.iter() {
+                let ty = field.ty;
+                // If this field doesn't have any lifetimes, then we can safely skip it
+                let mut visitor = HasLifetimeVisitor {
+                    has_lifetime: false,
+                };
+                visitor.visit_type(&ty);
+                // if !visitor.has_lifetime {
+                continue;
+                // }
+                let predicate = parse_quote! {
+                    #ty: dioxus::core::PropSafe
+                };
+                match &mut prop_safe_predicates {
+                    Some(predicates) => predicates.predicates.push(predicate),
+                    None => prop_safe_predicates = Some(parse_quote! { where #predicate }),
+                }
+            }
 
             Ok(quote! {
                 impl #impl_generics #name #ty_generics #where_clause {
@@ -657,7 +680,7 @@ Finally, call `.build()` to create the instance of `{name}`.
                 }
 
                 impl #impl_generics dioxus::prelude::Properties for #name #ty_generics
-                #b_generics_where_extras_predicates
+                #prop_safe_predicates
                 {
                     type Builder = #builder_name #generics_with_empty;
                     const IS_STATIC: bool = #is_static;
@@ -1183,5 +1206,15 @@ Finally, call `.build()` to create the instance of `{name}`.
                 _ => Err(Error::new_spanned(expr, "Expected (<...>=<...>)")),
             }
         }
+    }
+}
+
+struct HasLifetimeVisitor {
+    has_lifetime: bool,
+}
+
+impl<'ast> Visit<'ast> for HasLifetimeVisitor {
+    fn visit_lifetime(&mut self, _: &'ast syn::Lifetime) {
+        self.has_lifetime = true;
     }
 }
