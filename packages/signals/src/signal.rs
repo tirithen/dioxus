@@ -273,9 +273,11 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
     /// If the signal has been dropped, this will panic.
-    pub fn read_untracked(&self) -> Ref<T> {
+    pub fn read_untracked(
+        &self,
+    ) -> <<S as Storage<SignalData<T>>>::Ref as Mappable<SignalData<T>>>::Mapped<T> {
         let inner = self.inner.read();
-        Ref::map(inner, |v| &v.value)
+        S::Ref::map(inner, |v| &v.value)
     }
 
     /// Get a mutable reference to the signal's value.
@@ -283,8 +285,10 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     pub fn write(
         &self,
     ) -> Write<T, <<S as Storage<SignalData<T>>>::Mut as MappableMut<SignalData<T>>>::Mapped<T>, S>
+    {
         let inner = self.inner.write();
         Write {
+            write: S::Mut::map(inner, |v| &mut v.value),
             signal: SignalSubscriberDrop { signal: *self },
             phantom: std::marker::PhantomData,
         }
@@ -344,8 +348,11 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     }
 
     /// Map the signal to a new type.
-    pub fn map<O>(self, f: fn(&T) -> &O) -> SignalMap<O> {
-        SignalMap::new(self, f)
+    pub fn map<O>(self, f: fn(&T) -> &O) -> SignalMap<O, <<<S as Storage<SignalData<T>>>::Ref as Mappable<SignalData<T>>>::Mapped::<T> as Mappable<T>>::Mapped<O>> {
+        SignalMap {
+            origin_scope: self.origin_scope(),
+            mapping: CopyValue::new(Box::new(move || <<S as Storage<SignalData<T>>>::Ref as Mappable<SignalData<T>>>::Mapped::<T>::map(self.read(), f))),
+        }
     }
 }
 
@@ -500,7 +507,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> ReadOnlySignal<T, S> {
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
     /// If the signal has been dropped, this will panic.
-    pub fn read_untracked(&self) -> Ref<T> {
+    pub fn read_untracked(&self) -> <<S as Storage<SignalData<T>>>::Ref as Mappable<SignalData<T>>>::Mapped<T> {
         self.inner.read_untracked()
     }
 
