@@ -16,7 +16,7 @@ fn create_signals_global() {
 
     fn Child(cx: Scope) -> Element {
         let signal = create_without_cx();
-        let mapped = SignalMap::new(signal, |v| v.as_bytes());
+        let mapped = signal.map(|s| &s[0]);
 
         render! {
             "{signal:?}"
@@ -26,7 +26,7 @@ fn create_signals_global() {
 
     let _edits = dom.rebuild().santize();
 
-    fn create_without_cx() -> Signal<String> {
-        Signal::new("hello world".to_string())
+    fn create_without_cx() -> Signal<Vec<String>> {
+        Signal::new(vec!["hello world".to_string()])
     }
 }
