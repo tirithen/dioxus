@@ -15,6 +15,7 @@ use dioxus_interpreter_js::{get_node, minimal_bindings, save_template, Channel};
 use futures_channel::mpsc;
 use js_sys::Array;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 use std::{any::Any, rc::Rc};
 use wasm_bindgen::{closure::Closure, prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::{Document, Element, Event};
@@ -283,8 +284,19 @@ pub fn virtual_event_from_websys_event(event: web_sys::Event, target: Element) -
         }
         "drag" | "dragend" | "dragenter" | "dragexit" | "dragleave" | "dragover" | "dragstart"
         | "drop" => {
+            let mut files = None;
+            if let Some(event) = event.dyn_ref::<web_sys::DragEvent>() {
+                if let Some(data) = event.data_transfer() {
+                    #[cfg(feature = "file_engine")]
+                    #[allow(clippy::arc_with_non_send_sync)]
+                    if let Some(file_list) = data.files() {
+                        files = crate::file_engine::WebFileEngine::new(file_list)
+                            .map(|f| Arc::new(f) as Arc<dyn FileEngine>);
+                    }
+                }
+            }
             let mouse = MouseData::from(event);
-            Rc::new(DragData { mouse })
+            Rc::new(DragData { mouse, files })
         }
 
         "pointerdown" | "pointermove" | "pointerup" | "pointercancel" | "gotpointercapture"
