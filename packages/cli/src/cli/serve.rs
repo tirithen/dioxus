@@ -1,3 +1,5 @@
+use dioxus_cli_config::Platform;
+
 use super::*;
 use std::{fs::create_dir_all, io::Write, path::PathBuf};
 
@@ -11,7 +13,7 @@ pub struct Serve {
 
 impl Serve {
     pub async fn serve(self, bin: Option<PathBuf>) -> Result<()> {
-        let mut crate_config = crate::CrateConfig::new(bin)?;
+        let mut crate_config = dioxus_cli_config::CrateConfig::new(bin)?;
 
         // change the relase state.
         crate_config.with_hot_reload(self.serve.hot_reload);
@@ -31,16 +33,13 @@ impl Serve {
             crate_config.set_features(self.serve.features.unwrap());
         }
 
-        // Subdirectories don't work with the server
-        crate_config.dioxus_config.web.app.base_path = None;
-
         let platform = self
             .serve
             .platform
             .unwrap_or(crate_config.dioxus_config.application.default_platform);
 
         match platform {
-            cfg::Platform::Web => {
+            Platform::Web => {
                 // generate dev-index page
                 Serve::regen_dev_page(&crate_config)?;
 
@@ -48,7 +47,7 @@ impl Serve {
                 server::web::startup(self.serve.port, crate_config.clone(), self.serve.open)
                     .await?;
             }
-            cfg::Platform::Desktop => {
+            Platform::Desktop => {
                 server::desktop::startup(crate_config.clone()).await?;
             }
         }
@@ -58,14 +57,9 @@ impl Serve {
     pub fn regen_dev_page(crate_config: &CrateConfig) -> Result<()> {
         let serve_html = gen_page(&crate_config.dioxus_config, true);
 
-        let dist_path = crate_config.crate_dir.join(
-            crate_config
-                .dioxus_config
-                .application
-                .out_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from("dist")),
-        );
+        let dist_path = crate_config
+            .crate_dir
+            .join(crate_config.dioxus_config.application.out_dir.clone());
         if !dist_path.is_dir() {
             create_dir_all(&dist_path)?;
         }

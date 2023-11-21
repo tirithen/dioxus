@@ -1,10 +1,12 @@
 use crate::{
-    config::{CrateConfig, ExecutableType},
     error::{Error, Result},
     tools::Tool,
-    DioxusConfig,
 };
 use cargo_metadata::{diagnostic::Diagnostic, Message};
+use dioxus_cli_config::crate_root;
+use dioxus_cli_config::CrateConfig;
+use dioxus_cli_config::DioxusConfig;
+use dioxus_cli_config::ExecutableType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use std::{
@@ -45,6 +47,7 @@ pub fn build(config: &CrateConfig, quiet: bool) -> Result<BuildResult> {
     let ignore_files = build_assets(config)?;
 
     let t_start = std::time::Instant::now();
+    let _guard = dioxus_cli_config::__private::save_config(config);
 
     // [1] Build the .wasm module
     log::info!("🚅 Running build command...");
@@ -133,7 +136,7 @@ pub fn build(config: &CrateConfig, quiet: bool) -> Result<BuildResult> {
     }
 
     // check binaryen:wasm-opt tool
-    let dioxus_tools = dioxus_config.application.tools.clone().unwrap_or_default();
+    let dioxus_tools = dioxus_config.application.tools.clone();
     if dioxus_tools.contains_key("binaryen") {
         let info = dioxus_tools.get("binaryen").unwrap();
         let binaryen = crate::tools::Tool::Binaryen;
@@ -250,6 +253,7 @@ pub fn build_desktop(config: &CrateConfig, _is_serve: bool) -> Result<BuildResul
 
     let t_start = std::time::Instant::now();
     let ignore_files = build_assets(config)?;
+    let _guard = dioxus_cli_config::__private::save_config(config);
 
     let mut cmd = subprocess::Exec::cmd("cargo")
         .cwd(&config.crate_dir)
@@ -275,9 +279,9 @@ pub fn build_desktop(config: &CrateConfig, _is_serve: bool) -> Result<BuildResul
     }
 
     let cmd = match &config.executable {
-        crate::ExecutableType::Binary(name) => cmd.arg("--bin").arg(name),
-        crate::ExecutableType::Lib(name) => cmd.arg("--lib").arg(name),
-        crate::ExecutableType::Example(name) => cmd.arg("--example").arg(name),
+        ExecutableType::Binary(name) => cmd.arg("--bin").arg(name),
+        ExecutableType::Lib(name) => cmd.arg("--lib").arg(name),
+        ExecutableType::Example(name) => cmd.arg("--example").arg(name),
     };
 
     let warning_messages = prettier_build(cmd)?;
@@ -289,11 +293,11 @@ pub fn build_desktop(config: &CrateConfig, _is_serve: bool) -> Result<BuildResul
 
     let file_name: String;
     let mut res_path = match &config.executable {
-        crate::ExecutableType::Binary(name) | crate::ExecutableType::Lib(name) => {
+        ExecutableType::Binary(name) | ExecutableType::Lib(name) => {
             file_name = name.clone();
             config.target_dir.join(release_type).join(name)
         }
-        crate::ExecutableType::Example(name) => {
+        ExecutableType::Example(name) => {
             file_name = name.clone();
             config
                 .target_dir
@@ -350,13 +354,7 @@ pub fn build_desktop(config: &CrateConfig, _is_serve: bool) -> Result<BuildResul
 
     log::info!(
         "🚩 Build completed: [./{}]",
-        config
-            .dioxus_config
-            .application
-            .out_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("dist"))
-            .display()
+        config.dioxus_config.application.out_dir.clone().display()
     );
 
     println!("build desktop done");
@@ -429,7 +427,7 @@ fn prettier_build(cmd: subprocess::Exec) -> anyhow::Result<Vec<Diagnostic>> {
 }
 
 pub fn gen_page(config: &DioxusConfig, serve: bool) -> String {
-    let crate_root = crate::cargo::crate_root().unwrap();
+    let crate_root = crate_root().unwrap();
     let custom_html_file = crate_root.join("index.html");
     let mut html = if custom_html_file.is_file() {
         let mut buf = String::new();
@@ -449,8 +447,8 @@ pub fn gen_page(config: &DioxusConfig, serve: bool) -> String {
     let mut script_list = resources.script.unwrap_or_default();
 
     if serve {
-        let mut dev_style = resources.dev.style.clone().unwrap_or_default();
-        let mut dev_script = resources.dev.script.unwrap_or_default();
+        let mut dev_style = resources.dev.style.clone();
+        let mut dev_script = resources.dev.script.clone();
         style_list.append(&mut dev_style);
         script_list.append(&mut dev_script);
     }
@@ -462,13 +460,7 @@ pub fn gen_page(config: &DioxusConfig, serve: bool) -> String {
             &style.to_str().unwrap(),
         ))
     }
-    if config
-        .application
-        .tools
-        .clone()
-        .unwrap_or_default()
-        .contains_key("tailwindcss")
-    {
+    if config.application.tools.clone().contains_key("tailwindcss") {
         style_str.push_str("<link rel=\"stylesheet\" href=\"/{base_path}/tailwind.css\">\n");
     }
 
@@ -519,12 +511,7 @@ pub fn gen_page(config: &DioxusConfig, serve: bool) -> String {
         );
     }
 
-    let title = config
-        .web
-        .app
-        .title
-        .clone()
-        .unwrap_or_else(|| "dioxus | ⛺".into());
+    let title = config.web.app.title.clone();
 
     replace_or_insert_before("{app_title}", &title, "</title", &mut html);
 
@@ -551,7 +538,7 @@ fn build_assets(config: &CrateConfig) -> Result<Vec<PathBuf>> {
     let mut result = vec![];
 
     let dioxus_config = &config.dioxus_config;
-    let dioxus_tools = dioxus_config.application.tools.clone().unwrap_or_default();
+    let dioxus_tools = dioxus_config.application.tools.clone();
 
     // check sass tool state
     let sass = Tool::Sass;
