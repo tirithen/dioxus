@@ -1,3 +1,4 @@
+use crate::SignalMap;
 use std::{
     cell::RefCell,
     marker::PhantomData,
@@ -282,11 +283,8 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     pub fn write(
         &self,
     ) -> Write<T, <<S as Storage<SignalData<T>>>::Mut as MappableMut<SignalData<T>>>::Mapped<T>, S>
-    {
         let inner = self.inner.write();
-        let borrow = S::Mut::map(inner, |v| &mut v.value);
         Write {
-            write: borrow,
             signal: SignalSubscriberDrop { signal: *self },
             phantom: std::marker::PhantomData,
         }
@@ -343,6 +341,11 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     /// Get the generational id of the signal.
     pub fn id(&self) -> generational_box::GenerationalBoxId {
         self.inner.id()
+    }
+
+    /// Map the signal to a new type.
+    pub fn map<O>(self, f: fn(&T) -> &O) -> SignalMap<O> {
+        SignalMap::new(self, f)
     }
 }
 

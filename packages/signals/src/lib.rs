@@ -16,3 +16,5 @@ pub use signal::*;
 mod dependency;
 pub use dependency::*;
 pub use generational_box::{Storage, SyncStorage, UnsyncStorage};
+mod map;
+pub use map::*;
