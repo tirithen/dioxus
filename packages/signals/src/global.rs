@@ -1,7 +1,8 @@
 use dioxus_core::prelude::{
     provide_root_context, try_consume_context, IntoAttributeValue, ScopeId,
 };
-use generational_box::GenerationalRef;
+use generational_box::{GenerationalRef, Storage, UnsyncStorage};
+use std::fmt::{Debug, Display};
 use std::{
     any::Any,
     cell::{Ref, RefCell},
@@ -11,6 +12,7 @@ use std::{
     rc::Rc,
 };
 
+use crate::macros::rules::*;
 use crate::{MappedSignal, ReadOnlySignal, Signal, Write};
 
 /// A signal that can be accessed from anywhere in the application and created in a static
@@ -89,8 +91,8 @@ impl<T: 'static> GlobalSignal<T> {
     ///
     /// If the signal has been dropped, this will panic.
     #[track_caller]
-    pub fn write(&self) -> Write<T> {
-        self.signal().write()
+    pub fn write(&self) -> Write<'static, T> {
+        self.signal().write_unchecked()
     }
 
     /// Set the value of the signal. This will trigger an update on all subscribers.

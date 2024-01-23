@@ -1,5 +1,8 @@
 // use crate::{Effect, EffectInner, GlobalMemo, GlobalSignal, MappedSignal};
-use crate::{get_effect_ref, EffectStackRef, SignalSubscriberDrop, EFFECT_STACK};
+use crate::{
+    get_effect_ref, Effect, EffectInner, EffectStackRef, GlobalMemo, ReadOnlySignal,
+    SignalSubscriberDrop, EFFECT_STACK,
+};
 use crate::{use_copy_value, write_guard::Write, CopyValue};
 use dioxus_core::{
     prelude::{
@@ -169,6 +172,21 @@ pub(crate) struct SignalSubscribers {
 }
 
 impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
+    pub fn new_in_scope(value: T, owner: ScopeId) -> Self {
+        todo!()
+        // #[cfg(debug_assertions)]
+        // let caller = std::panic::Location::caller();
+
+        // let inner = CopyValue::new_maybe_sync_in_scope(owner, || SignalData {
+        //     value,
+        //     subscribers: Default::default(),
+        //     update_any: schedule_update_any(),
+        //     effect_ref: get_effect_ref(),
+        // });
+
+        // Signal { inner }
+    }
+
     /// Get the scope the signal was created in.
     pub fn origin_scope(&self) -> ScopeId {
         self.inner.origin_scope()
@@ -180,7 +198,21 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     #[track_caller]
     pub fn read<'a>(&'a self) -> S::Ref<'a, T> {
         let inner = self.inner.read();
+        self.read_tracking_subscriptions(&inner);
+        S::map(inner, |v| &v.value)
+    }
 
+    #[track_caller]
+    pub fn read_static_ref(&self) -> S::Ref<'static, T> {
+        let inner = self.inner.read_static_ref();
+        self.read_tracking_subscriptions(&inner);
+        S::map(inner, |v| &v.value)
+    }
+
+    fn read_tracking_subscriptions<'a>(
+        &self,
+        inner: &<S as Storage<SignalData<T>>>::Ref<'a, SignalData<T>>,
+    ) {
         if let Some(effect) = EFFECT_STACK.with(|stack| stack.current()) {
             let subscribers = inner.subscribers.read();
             if !subscribers.effect_subscribers.contains(&effect.inner.id()) {
@@ -206,8 +238,6 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
                 }
             }
         }
-
-        S::map(inner, |v| &v.value)
     }
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
@@ -222,17 +252,20 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     ///
     /// If the signal has been dropped, this will panic.
     #[track_caller]
-    pub fn write<'a>(&'a mut self) -> Write<T, S> {
-        self.write_unchecked()
+    pub fn write<'a>(&'a mut self) -> Write<'a, T, S> {
+        Write {
+            write: S::map_mut(self.inner.write(), |v| &mut v.value),
+            signal: SignalSubscriberDrop(*self),
+        }
     }
 
     /// Write to the value through an immutable reference.
     ///
     /// This is public since it's useful in many scenarios, but we generally recommend mutation through [`Self::write`] instead.
     #[track_caller]
-    pub fn write_unchecked(&self) -> Write<T, S> {
+    pub fn write_unchecked(&self) -> Write<'static, T, S> {
         Write {
-            write: S::map_mut(self.inner.write(), |v| &mut v.value),
+            write: S::map_mut(self.inner.write_static_ref(), |v| &mut v.value),
             signal: SignalSubscriberDrop(*self),
         }
     }
@@ -401,71 +434,72 @@ fn current_unsubscriber() -> Rc<RefCell<Unsubscriber>> {
 }
 
 impl<T: PartialEq + 'static> Signal<T> {
-    // /// Creates a new global Signal that can be used in a global static.
-    // pub const fn global_memo(constructor: fn() -> T) -> GlobalMemo<T>
-    // where
-    //     T: PartialEq,
-    // {
-    //     GlobalMemo::new(constructor)
-    // }
+    /// Creates a new global Signal that can be used in a global static.
+    pub const fn global_memo(constructor: fn() -> T) -> GlobalMemo<T>
+    where
+        T: PartialEq,
+    {
+        GlobalMemo::new(constructor)
+    }
 
-    //     /// Creates a new unsync Selector. The selector will be run immediately and whenever any signal it reads changes.
-    //     ///
-    //     /// Selectors can be used to efficiently compute derived data from signals.
-    //     #[track_caller]
-    //     pub fn selector(f: impl FnMut() -> T + 'static) -> ReadOnlySignal<T> {
-    //         Self::maybe_sync_memo(f)
-    //     }
+    /// Creates a new unsync Selector. The selector will be run immediately and whenever any signal it reads changes.
+    ///
+    /// Selectors can be used to efficiently compute derived data from signals.
+    #[track_caller]
+    pub fn selector(f: impl FnMut() -> T + 'static) -> ReadOnlySignal<T> {
+        todo!()
+        // Self::maybe_sync_memo(f)
+    }
 
-    //     /// Creates a new Selector that may be Sync + Send. The selector will be run immediately and whenever any signal it reads changes.
-    //     ///
-    //     /// Selectors can be used to efficiently compute derived data from signals.
-    //     #[track_caller]
-    //     pub fn maybe_sync_memo<S: Storage<SignalData<T>>>(
-    //         mut f: impl FnMut() -> T + 'static,
-    //     ) -> ReadOnlySignal<T, S> {
-    //         let mut state = Signal::<T, S> {
-    //             inner: CopyValue::invalid(),
-    //         };
-    //         let effect = Effect {
-    //             source: current_scope_id().expect("in a virtual dom"),
-    //             inner: CopyValue::invalid(),
-    //         };
+    /// Creates a new Selector that may be Sync + Send. The selector will be run immediately and whenever any signal it reads changes.
+    ///
+    /// Selectors can be used to efficiently compute derived data from signals.
+    #[track_caller]
+    pub fn maybe_sync_memo<S: Storage<SignalData<T>>>(
+        mut f: impl FnMut() -> T + 'static,
+    ) -> ReadOnlySignal<T, S> {
+        let mut state = Signal::<T, S> {
+            inner: CopyValue::invalid(),
+        };
+        let effect = Effect {
+            source: current_scope_id().expect("in a virtual dom"),
+            inner: CopyValue::invalid(),
+        };
 
-    //         {
-    //             EFFECT_STACK.with(|stack| stack.effects.write().push(effect));
-    //         }
-    //         state.inner.value.set(SignalData {
-    //             subscribers: Default::default(),
-    //             update_any: schedule_update_any(),
-    //             value: f(),
-    //             effect_ref: get_effect_ref(),
-    //         });
-    //         {
-    //             EFFECT_STACK.with(|stack| stack.effects.write().pop());
-    //         }
+        {
+            EFFECT_STACK.with(|stack| stack.effects.write().push(effect));
+        }
+        state.inner.value.set(SignalData {
+            subscribers: Default::default(),
+            update_any: schedule_update_any(),
+            value: f(),
+            effect_ref: get_effect_ref(),
+        });
+        {
+            EFFECT_STACK.with(|stack| stack.effects.write().pop());
+        }
 
-    //         let invalid_id = effect.id();
-    //         tracing::trace!("Creating effect: {:?}", invalid_id);
-    //         effect.inner.value.set(EffectInner {
-    //             callback: Box::new(move || {
-    //                 let value = f();
-    //                 let changed = {
-    //                     let old = state.inner.read();
-    //                     value != old.value
-    //                 };
-    //                 if changed {
-    //                     state.set(value)
-    //                 }
-    //             }),
-    //             id: invalid_id,
-    //         });
-    //         {
-    //             EFFECT_STACK.with(|stack| stack.effect_mapping.write().insert(invalid_id, effect));
-    //         }
+        let invalid_id = effect.id();
+        tracing::trace!("Creating effect: {:?}", invalid_id);
+        effect.inner.value.set(EffectInner {
+            callback: Box::new(move || {
+                let value = f();
+                let changed = {
+                    let old = state.inner.read();
+                    value != old.value
+                };
+                if changed {
+                    state.set(value)
+                }
+            }),
+            id: invalid_id,
+        });
+        {
+            EFFECT_STACK.with(|stack| stack.effect_mapping.write().insert(invalid_id, effect));
+        }
 
-    //         ReadOnlySignal::new_maybe_sync(state)
-    //     }
+        ReadOnlySignal::new_maybe_sync(state)
+    }
 }
 
 #[cfg(feature = "serde")]

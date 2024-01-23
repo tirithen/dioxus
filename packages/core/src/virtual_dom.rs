@@ -436,18 +436,17 @@ impl VirtualDom {
                 Ok(Some(val)) => some_msg = Some(val),
                 Ok(None) => return,
                 Err(_) => {
-                    // Now that we have collected all queued work, we should check if we have any dirty scopes. If there are not, then we can poll any queued futures
-                    let has_dirty_scopes = !self.dirty_scopes.is_empty();
+                    // If there's dirty scopes, then we should exit
+                    if !self.dirty_scopes.is_empty() {
+                        return;
+                    }
 
-                    if !has_dirty_scopes {
-                        // If we have no dirty scopes, then we should poll any tasks that have been notified
-                        while let Some(task) = self.runtime.take_queued_task() {
-                            self.handle_task_wakeup(task);
-                        }
+                    while let Some(task) = self.runtime.take_queued_task() {
+                        self.handle_task_wakeup(task);
                     }
 
                     // If we have any dirty scopes, or finished fiber trees then we should exit
-                    if has_dirty_scopes || !self.suspended_scopes.is_empty() {
+                    if !self.dirty_scopes.is_empty() || !self.suspended_scopes.is_empty() {
                         return;
                     }
 

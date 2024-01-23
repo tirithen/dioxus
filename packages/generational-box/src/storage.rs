@@ -26,6 +26,8 @@ pub trait Storage<Data = ()>: 'static + Sized {
     type Mut<'a, T: ?Sized + 'static>: DerefMut<Target = T>;
 
     /// Claim a new instance of this storage type
+    ///
+    /// It's up to you to dispose of the memory location when you're done with it!
     fn claim() -> &'static MemoryLocation<Self>;
 
     /// Drop the inner value and return the memory location to the runtime.

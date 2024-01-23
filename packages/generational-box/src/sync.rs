@@ -1,4 +1,4 @@
-use crate::innerlude::*;
+use crate::{innerlude::*, GenerationalRefBorrowInfo, GenerationalRefMutBorrowInfo};
 use parking_lot::{
     MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
@@ -11,6 +11,7 @@ use std::{
 #[derive(Default)]
 pub struct SyncStorage(RwLock<Option<Box<dyn Any + Send + Sync>>>);
 
+#[allow(clippy::type_complexity)]
 fn sync_runtime() -> &'static Arc<Mutex<Vec<&'static MemoryLocation<SyncStorage>>>> {
     static SYNC_RUNTIME: OnceLock<Arc<Mutex<Vec<&'static MemoryLocation<SyncStorage>>>>> =
         OnceLock::new();
@@ -41,9 +42,13 @@ impl<T: Sync + Send + 'static> Storage<T> for SyncStorage {
         self.0.data_ptr() as usize
     }
 
+    fn set(&self, value: T) {
+        *self.0.write() = Some(Box::new(value));
+    }
+
     fn try_read<'a>(
         &'static self,
-        at: crate::GenerationalRefBorrowInfo,
+        at: GenerationalRefBorrowInfo,
     ) -> Result<Self::Ref<'a, T>, BorrowError> {
         let read = self.0.try_read();
 
@@ -60,7 +65,7 @@ impl<T: Sync + Send + 'static> Storage<T> for SyncStorage {
 
     fn try_write<'a>(
         &'static self,
-        at: crate::GenerationalRefMutBorrowInfo,
+        at: GenerationalRefMutBorrowInfo,
     ) -> Result<Self::Mut<'a, T>, BorrowMutError> {
         let write = self.0.try_write();
 
@@ -73,10 +78,6 @@ impl<T: Sync + Send + 'static> Storage<T> for SyncStorage {
                 })
             })
             .map(|guard| GenerationalRefMut::new(guard, at))
-    }
-
-    fn set(&self, value: T) {
-        *self.0.write() = Some(Box::new(value));
     }
 
     fn try_map<'a, I, U: ?Sized + 'static>(

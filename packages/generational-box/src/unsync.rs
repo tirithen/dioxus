@@ -1,17 +1,13 @@
 use crate::innerlude::*;
 use std::cell::{Ref, RefCell, RefMut};
 
-// The unsunc runtime is backed by a simple vec of available memory locations.
-//
-// Whenever a generational box has "dispose" called on it, the memory will be freed and added to the list of available
-// memory locations. To claim a memory location, the runtime will pop from the vec. If the vec is empty, a new memory location.
-thread_local! {
-    static UNSYNC_RUNTIME: RefCell<Vec<&'static MemoryLocation<UnsyncStorage>>> = RefCell::new(Vec::new());
-}
-
 /// A unsync storage. This is the default storage type.
 #[derive(Default)]
 pub struct UnsyncStorage(RefCell<Option<Box<dyn std::any::Any>>>);
+
+thread_local! {
+    static UNSYNC_RUNTIME: RefCell<Vec<&'static MemoryLocation<UnsyncStorage>>> = RefCell::new(Vec::new());
+}
 
 impl<T: 'static> Storage<T> for UnsyncStorage {
     type Ref<'a, R: ?Sized + 'static> = GenerationalRef<Ref<'static, R>>;
@@ -38,6 +34,10 @@ impl<T: 'static> Storage<T> for UnsyncStorage {
 
     fn data_ptr(&self) -> usize {
         self.0.as_ptr() as usize
+    }
+
+    fn set(&self, value: T) {
+        *self.0.borrow_mut() = Some(Box::new(value));
     }
 
     fn try_read<'a>(
@@ -72,10 +72,6 @@ impl<T: 'static> Storage<T> for UnsyncStorage {
                 })
             })
             .map(|guard| GenerationalRefMut::new(guard, at))
-    }
-
-    fn set(&self, value: T) {
-        *self.0.borrow_mut() = Some(Box::new(value));
     }
 
     fn try_map<'a, I, U: ?Sized + 'static>(

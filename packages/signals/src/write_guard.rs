@@ -1,5 +1,5 @@
 use crate::{Signal, SignalData};
-use generational_box::Storage;
+use generational_box::{Storage, UnsyncStorage};
 use std::ops::{Deref, DerefMut};
 
 /// A mutable reference to a signal's value.
@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 /// B is the dynamically checked type of the write (RefMut)
 /// S is the storage type of the signal
 /// I is the type of the original signal
-pub struct Write<'a, T, S, I = T>
+pub struct Write<'a, T, S = UnsyncStorage, I = T>
 where
     T: 'static,
     S: Storage<SignalData<I>>,

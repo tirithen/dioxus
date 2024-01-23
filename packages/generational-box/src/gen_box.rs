@@ -2,7 +2,7 @@ use crate::{innerlude::*, UnsyncStorage};
 use std::marker::PhantomData;
 
 /// The core Copy state type. The generational box will be dropped when the [Owner] is dropped.
-pub struct GenerationalBox<T, S: 'static> {
+pub struct GenerationalBox<T, S: 'static = UnsyncStorage> {
     pub(crate) raw: &'static MemoryLocation<S>,
     pub(crate) generation: u32,
     pub(crate) created_at: &'static std::panic::Location<'static>,
@@ -111,7 +111,7 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
 
     /// Try to write the value. Returns None if the value is no longer valid.
     #[track_caller]
-    pub fn try_write<'a>(&'a self) -> Result<S::Mut<'a, T>, BorrowMutError> {
+    pub fn try_write<'a>(&self) -> Result<S::Mut<'a, T>, BorrowMutError> {
         if !self.validate() {
             return Err(BorrowMutError::Dropped(ValueDroppedError {
                 created_at: self.created_at,
@@ -132,7 +132,7 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
 
     /// Write the value. Panics if the value is no longer valid.
     #[track_caller]
-    pub fn write<'a>(&'a self) -> S::Mut<'a, T> {
+    pub fn write<'a>(&self) -> S::Mut<'a, T> {
         self.try_write().unwrap()
     }
 

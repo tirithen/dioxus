@@ -27,6 +27,12 @@ pub struct CopyValue<T: 'static, S: 'static = UnsyncStorage> {
     origin_scope: ScopeId,
 }
 
+/// An owner of CopyValues that drops all the values when it is dropped.
+/// This is provided via context so CopyValues are automatically cleaned up
+// struct Owner<S: Storage> {
+// items: Vec<&'static MemoryMapping>,
+// }
+
 impl<T: 'static, S: Storage<T>> CopyValue<T, S> {
     ///
     pub fn invalid() -> Self {
@@ -91,6 +97,11 @@ impl<T: 'static, S: Storage<T>> CopyValue<T, S> {
     /// Write the value. If the value has been dropped, this will panic.
     #[track_caller]
     pub fn write<'a>(&'a self) -> S::Mut<'a, T> {
+        self.value.write()
+    }
+
+    #[track_caller]
+    pub fn write_static_ref(&self) -> S::Mut<'static, T> {
         self.value.write()
     }
 

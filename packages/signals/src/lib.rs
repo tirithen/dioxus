@@ -16,8 +16,8 @@ pub use effect::*;
 mod write_guard;
 pub use write_guard::*;
 
-// mod selector;
-// pub use selector::*;
+mod selector;
+pub use selector::*;
 
 pub(crate) mod signal;
 pub use signal::*;
@@ -28,8 +28,8 @@ pub use readonly_signal::*;
 // mod dependency;
 // pub use dependency::*;
 
-// mod map;
-// pub use map::*;
+mod map;
+pub use map::*;
 
 mod copyvalue;
 pub use copyvalue::*;
@@ -37,8 +37,8 @@ pub use copyvalue::*;
 // mod comparer;
 // pub use comparer::*;
 
-// mod global;
-// pub use global::*;
+mod global;
+pub use global::*;
 
 mod impls;
 

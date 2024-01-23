@@ -13,18 +13,10 @@ thread_local! {
     pub(crate)static EFFECT_STACK: EffectStack = EffectStack::default();
 }
 
+#[derive(Default)]
 pub(crate) struct EffectStack {
     pub(crate) effects: RwLock<Vec<Effect>>,
     pub(crate) effect_mapping: RwLock<FxHashMap<GenerationalBoxId, Effect>>,
-}
-
-impl Default for EffectStack {
-    fn default() -> Self {
-        Self {
-            effects: RwLock::new(Vec::new()),
-            effect_mapping: RwLock::new(FxHashMap::default()),
-        }
-    }
 }
 
 impl EffectStack {
@@ -46,30 +38,34 @@ impl EffectStackRef {
 }
 
 pub(crate) fn get_effect_ref() -> EffectStackRef {
-    match try_consume_context() {
-        Some(rt) => rt,
-        None => {
-            let (sender, mut receiver) = futures_channel::mpsc::unbounded();
-            spawn_forever(async move {
-                while let Some(id) = receiver.next().await {
-                    EFFECT_STACK.with(|stack| {
-                        let effect_mapping = stack.effect_mapping.read();
-                        if let Some(mut effect) = effect_mapping.get(&id).copied() {
-                            tracing::trace!("Rerunning effect: {:?}", id);
-                            effect.try_run();
-                        } else {
-                            tracing::trace!("Effect not found: {:?}", id);
-                        }
-                    });
+    if let Some(rt) = try_consume_context() {
+        return rt;
+    }
+
+    let (sender, mut receiver) = futures_channel::mpsc::unbounded();
+
+    spawn_forever(async move {
+        while let Some(id) = receiver.next().await {
+            EFFECT_STACK.with(|stack| {
+                let effect_mapping = stack.effect_mapping.read();
+
+                if let Some(mut effect) = effect_mapping.get(&id).copied() {
+                    tracing::trace!("Rerunning effect: {:?}", id);
+                    effect.try_run();
+                } else {
+                    tracing::trace!("Effect not found: {:?}", id);
                 }
             });
-            let stack_ref = EffectStackRef {
-                rerun_effect: sender,
-            };
-            provide_root_context(stack_ref.clone());
-            stack_ref
         }
-    }
+    });
+
+    let stack_ref = EffectStackRef {
+        rerun_effect: sender,
+    };
+
+    provide_root_context(stack_ref.clone());
+
+    stack_ref
 }
 
 /// Create a new effect. The effect will be run immediately and whenever any signal it reads changes.
@@ -102,21 +98,6 @@ impl EffectInner {
     }
 }
 
-impl Drop for EffectInner {
-    fn drop(&mut self) {
-        EFFECT_STACK.with(|stack| {
-            tracing::trace!("Dropping effect: {:?}", self.id);
-            stack.effect_mapping.write().remove(&self.id);
-        });
-    }
-}
-
-impl Debug for Effect {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("{:?}", self.inner.value))
-    }
-}
-
 impl Effect {
     pub(crate) fn current() -> Option<Self> {
         EFFECT_STACK.with(|stack| stack.effects.read().last().copied())
@@ -126,7 +107,7 @@ impl Effect {
     ///
     /// The signal will be owned by the current component and will be dropped when the component is dropped.
     pub fn new(callback: impl FnMut() + 'static) -> Self {
-        let mut myself = Self {
+        let myself = Self {
             source: current_scope_id().expect("in a virtual dom"),
             inner: EffectInner::new(Box::new(callback)),
         };
@@ -139,7 +120,7 @@ impl Effect {
         });
         tracing::trace!("Created effect: {:?}", myself);
 
-        myself.try_run();
+        get_effect_ref().rerun_effect(myself.inner.id());
 
         myself
     }
@@ -165,5 +146,20 @@ impl Effect {
     /// Get the id of this effect.
     pub fn id(&self) -> GenerationalBoxId {
         self.inner.id()
+    }
+}
+
+impl Drop for EffectInner {
+    fn drop(&mut self) {
+        EFFECT_STACK.with(|stack| {
+            tracing::trace!("Dropping effect: {:?}", self.id);
+            stack.effect_mapping.write().remove(&self.id);
+        });
+    }
+}
+
+impl Debug for Effect {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self.inner.value))
     }
 }
