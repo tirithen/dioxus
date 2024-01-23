@@ -12,12 +12,13 @@ pub struct MemoryLocationBorrowInfo {
 
 impl MemoryLocationBorrowInfo {
     pub fn borrow_mut_error(&self) -> BorrowMutError {
-        if let Some(borrowed_mut_at) = self.borrowed_mut_at.read().as_ref() {
-            BorrowMutError::AlreadyBorrowedMut(AlreadyBorrowedMutError { borrowed_mut_at })
-        } else {
-            BorrowMutError::AlreadyBorrowed(AlreadyBorrowedError {
+        match self.borrowed_mut_at.read().as_ref() {
+            Some(borrowed_mut_at) => {
+                BorrowMutError::AlreadyBorrowedMut(AlreadyBorrowedMutError { borrowed_mut_at })
+            }
+            None => BorrowMutError::AlreadyBorrowed(AlreadyBorrowedError {
                 borrowed_at: self.borrowed_at.read().clone(),
-            })
+            }),
         }
     }
 

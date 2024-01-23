@@ -1,6 +1,6 @@
 use dioxus_core::prelude::{consume_context, provide_context, spawn, use_hook};
 use dioxus_core::Task;
-use dioxus_signals::{CopyValue, Signal};
+use dioxus_signals::{use_copy_value, use_signal, CopyValue, Signal};
 pub use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use std::future::Future;
 
@@ -71,11 +71,15 @@ where
     G: FnOnce(UnboundedReceiver<M>) -> F,
     F: Future<Output = ()> + 'static,
 {
+    let needs_regen = use_signal(|| true);
+    let tx = use_copy_value(|| None);
+    let task = use_copy_value(|| None);
+
     let coroutine = use_hook(|| {
         provide_context(Coroutine {
-            needs_regen: Signal::new(true),
-            tx: CopyValue::new(None),
-            task: CopyValue::new(None),
+            needs_regen,
+            tx,
+            task,
         })
     });
 

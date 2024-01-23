@@ -9418,7 +9418,6 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "dioxus-fullstack",
- "dioxus-router",
  "dioxus-web",
  "serde",
  "tokio",

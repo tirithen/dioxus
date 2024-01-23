@@ -1,8 +1,8 @@
-use crate::innerlude::*;
+use crate::{innerlude::*, UnsyncStorage};
 use std::marker::PhantomData;
 
 /// The core Copy state type. The generational box will be dropped when the [Owner] is dropped.
-pub struct GenerationalBox<T, S: 'static = crate::UnsyncStorage> {
+pub struct GenerationalBox<T, S: 'static> {
     pub(crate) raw: &'static MemoryLocation<S>,
     pub(crate) generation: u32,
     pub(crate) created_at: &'static std::panic::Location<'static>,
@@ -17,6 +17,9 @@ pub struct GenerationalBoxId {
 }
 
 impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
+    /// Claim a new generational box.
+    ///
+    /// Does not initialize the value.
     pub fn claim() -> Self {
         let raw = S::claim();
         let generation = raw.generation.load(std::sync::atomic::Ordering::Relaxed);
@@ -29,12 +32,16 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
         }
     }
 
+    /// Create a new generational box with the given value.
     pub fn new(value: T) -> Self {
         let new = Self::claim();
         new.raw.data.set(value);
         new
     }
 
+    /// Drop the generational box's value and move its generation forward.
+    ///
+    /// Any future reads or writes will fail via panic
     pub fn dispose(&self) {
         // Wipe away the data.
         self.raw.data.dispose(self.raw);
@@ -45,16 +52,13 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn swap(&self, new: T) {
-        self.raw.data.set(new);
-    }
-
+    /// Set the caller location for the generational box.
     pub fn set_caller(&mut self, created_at: &'static std::panic::Location<'static>) {
         self.created_at = created_at;
     }
 
     #[inline(always)]
-    pub fn validate(&self) -> bool {
+    fn validate(&self) -> bool {
         self.raw
             .generation
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -148,5 +152,17 @@ impl<T, S: 'static> Copy for GenerationalBox<T, S> {}
 impl<T, S> Clone for GenerationalBox<T, S> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<T: 'static, S: Storage<T>> std::fmt::Debug for GenerationalBox<T, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{:?}@{:?}",
+            Storage::data_ptr(&self.raw.data),
+            self.generation
+        ))?;
+
+        Ok(())
     }
 }

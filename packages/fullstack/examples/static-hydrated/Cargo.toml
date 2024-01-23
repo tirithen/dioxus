@@ -8,9 +8,8 @@ publish = false
 
 [dependencies]
 dioxus-web = { workspace = true, features = ["hydrate"], optional = true }
-dioxus = { workspace = true }
+dioxus = { workspace = true, features = ["router"]}
 dioxus-fullstack = { workspace = true }
-dioxus-router = { workspace = true, features = ["fullstack"] }
 tokio = { workspace = true, features = ["full"], optional = true }
 serde = "1.0.159"
 

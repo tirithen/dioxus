@@ -2,11 +2,14 @@ use crate::innerlude::*;
 use parking_lot::{
     MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
-use std::sync::{Arc, OnceLock};
+use std::{
+    any::Any,
+    sync::{Arc, OnceLock},
+};
 
 /// A thread safe storage. This is slower than the unsync storage, but allows you to share the value between threads.
 #[derive(Default)]
-pub struct SyncStorage(RwLock<Option<Box<dyn std::any::Any + Send + Sync>>>);
+pub struct SyncStorage(RwLock<Option<Box<dyn Any + Send + Sync>>>);
 
 fn sync_runtime() -> &'static Arc<Mutex<Vec<&'static MemoryLocation<SyncStorage>>>> {
     static SYNC_RUNTIME: OnceLock<Arc<Mutex<Vec<&'static MemoryLocation<SyncStorage>>>>> =
@@ -21,13 +24,11 @@ impl<T: Sync + Send + 'static> Storage<T> for SyncStorage {
 
     fn claim() -> &'static MemoryLocation<Self> {
         sync_runtime().lock().pop().unwrap_or_else(|| {
-            let data: &'static MemoryLocation<Self> = &*Box::leak(Box::new(MemoryLocation {
+            &*Box::leak(Box::new(MemoryLocation {
                 data: Self::default(),
                 generation: 0.into(),
                 borrow: Default::default(),
-            }));
-
-            data
+            }))
         })
     }
 

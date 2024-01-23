@@ -131,9 +131,10 @@ impl RouterContext {
             }));
         }
 
-        Self {
-            inner: CopyValue::new_in_scope(myself, ScopeId::ROOT),
-        }
+        todo!()
+        // Self {
+        //     inner: CopyValue::new_in_scope(myself, ScopeId::ROOT),
+        // }
     }
 
     pub(crate) fn route_from_str(&self, route: &str) -> Result<Rc<dyn Any>, String> {

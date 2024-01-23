@@ -1,4 +1,14 @@
-use crate::{Effect, EffectInner, GlobalMemo, GlobalSignal, MappedSignal};
+// use crate::{Effect, EffectInner, GlobalMemo, GlobalSignal, MappedSignal};
+use crate::{get_effect_ref, EffectStackRef, EFFECT_STACK};
+use crate::{use_copy_value, CopyValue};
+use dioxus_core::{
+    prelude::{
+        current_scope_id, has_context, provide_context, schedule_update_any, IntoAttributeValue,
+    },
+    ScopeId,
+};
+use generational_box::{GenerationalBoxId, Storage, SyncStorage, UnsyncStorage};
+use parking_lot::RwLock;
 use std::{
     cell::RefCell,
     marker::PhantomData,
@@ -7,18 +17,6 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
-
-use dioxus_core::{
-    prelude::{
-        current_scope_id, has_context, provide_context, schedule_update_any, use_hook,
-        IntoAttributeValue,
-    },
-    ScopeId,
-};
-use generational_box::{GenerationalBoxId, Storage, SyncStorage, UnsyncStorage};
-use parking_lot::RwLock;
-
-use crate::{get_effect_ref, CopyValue, EffectStackRef, EFFECT_STACK};
 
 /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
 ///
@@ -38,7 +36,7 @@ use crate::{get_effect_ref, CopyValue, EffectStackRef, EFFECT_STACK};
 /// fn Child(state: Signal<u32>) -> Element {
 ///     let state = *state;
 ///
-///     use_future( |()| async move {
+///     use_future(|| async move {
 ///         // Because the signal is a Copy type, we can use it in an async block without cloning it.
 ///         *state.write() += 1;
 ///     });
@@ -57,13 +55,14 @@ pub fn use_signal<T: 'static>(f: impl FnOnce() -> T) -> Signal<T, UnsyncStorage>
     #[cfg(debug_assertions)]
     let caller = std::panic::Location::caller();
 
-    use_hook(|| {
-        Signal::new_with_caller(
-            f(),
-            #[cfg(debug_assertions)]
-            caller,
-        )
-    })
+    let inner = use_copy_value(|| SignalData {
+        value: f(),
+        subscribers: Default::default(),
+        update_any: schedule_update_any(),
+        effect_ref: get_effect_ref(),
+    });
+
+    Signal { inner }
 }
 
 /// Creates a new `Send + Sync`` Signal. Signals are a Copy state management solution with automatic dependency tracking.
@@ -84,7 +83,7 @@ pub fn use_signal<T: 'static>(f: impl FnOnce() -> T) -> Signal<T, UnsyncStorage>
 /// fn Child(cx: Scope, state: Signal<u32, SyncStorage>) -> Element {
 ///     let state = *state;
 ///
-///     use_future!(cx,  |()| async move {
+///     use_future(|| async move {
 ///         // This signal is Send + Sync, so we can use it in an another thread
 ///         tokio::spawn(async move {
 ///             // Because the signal is a Copy type, we can use it in an async block without cloning it.
@@ -105,13 +104,15 @@ pub fn use_signal<T: 'static>(f: impl FnOnce() -> T) -> Signal<T, UnsyncStorage>
 pub fn use_signal_sync<T: Send + Sync + 'static>(f: impl FnOnce() -> T) -> Signal<T, SyncStorage> {
     #[cfg(debug_assertions)]
     let caller = std::panic::Location::caller();
-    use_hook(|| {
-        Signal::new_with_caller(
-            f(),
-            #[cfg(debug_assertions)]
-            caller,
-        )
-    })
+
+    let inner = use_copy_value(|| SignalData {
+        value: f(),
+        subscribers: Default::default(),
+        update_any: schedule_update_any(),
+        effect_ref: get_effect_ref(),
+    });
+
+    Signal { inner }
 }
 
 struct Unsubscriber {
@@ -130,15 +131,12 @@ impl Drop for Unsubscriber {
 }
 
 fn current_unsubscriber() -> Rc<RefCell<Unsubscriber>> {
-    match has_context() {
+    match has_context::<Rc<RefCell<Unsubscriber>>>() {
         Some(rt) => rt,
-        None => {
-            let owner = Unsubscriber {
-                scope: current_scope_id().expect("in a virtual dom"),
-                subscribers: Default::default(),
-            };
-            provide_context(Rc::new(RefCell::new(owner)))
-        }
+        None => provide_context(Rc::new(RefCell::new(Unsubscriber {
+            scope: current_scope_id().expect("in a virtual dom"),
+            subscribers: Default::default(),
+        }))),
     }
 }
 
@@ -195,158 +193,7 @@ pub struct Signal<T: 'static, S: Storage<SignalData<T>> = UnsyncStorage> {
 /// A signal that can safely shared between threads.
 pub type SyncSignal<T> = Signal<T, SyncStorage>;
 
-#[cfg(feature = "serde")]
-impl<T: serde::Serialize + 'static> serde::Serialize for Signal<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.read().serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T: serde::Deserialize<'de> + 'static> serde::Deserialize<'de> for Signal<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self::new(T::deserialize(deserializer)?))
-    }
-}
-
-impl<T: 'static> Signal<T> {
-    /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
-    #[track_caller]
-    pub fn new(value: T) -> Self {
-        Self::new_maybe_sync(value)
-    }
-
-    /// Create a new signal with a custom owner scope. The signal will be dropped when the owner scope is dropped instead of the current scope.
-    #[track_caller]
-    pub fn new_in_scope(value: T, owner: ScopeId) -> Self {
-        Self::new_maybe_sync_in_scope(value, owner)
-    }
-
-    /// Creates a new global Signal that can be used in a global static.
-    pub const fn global(constructor: fn() -> T) -> GlobalSignal<T> {
-        GlobalSignal::new(constructor)
-    }
-}
-
-impl<T: PartialEq + 'static> Signal<T> {
-    /// Creates a new global Signal that can be used in a global static.
-    pub const fn global_memo(constructor: fn() -> T) -> GlobalMemo<T>
-    where
-        T: PartialEq,
-    {
-        GlobalMemo::new(constructor)
-    }
-
-    /// Creates a new unsync Selector. The selector will be run immediately and whenever any signal it reads changes.
-    ///
-    /// Selectors can be used to efficiently compute derived data from signals.
-    #[track_caller]
-    pub fn selector(f: impl FnMut() -> T + 'static) -> ReadOnlySignal<T> {
-        Self::maybe_sync_memo(f)
-    }
-
-    /// Creates a new Selector that may be Sync + Send. The selector will be run immediately and whenever any signal it reads changes.
-    ///
-    /// Selectors can be used to efficiently compute derived data from signals.
-    #[track_caller]
-    pub fn maybe_sync_memo<S: Storage<SignalData<T>>>(
-        mut f: impl FnMut() -> T + 'static,
-    ) -> ReadOnlySignal<T, S> {
-        let mut state = Signal::<T, S> {
-            inner: CopyValue::invalid(),
-        };
-        let effect = Effect {
-            source: current_scope_id().expect("in a virtual dom"),
-            inner: CopyValue::invalid(),
-        };
-
-        {
-            EFFECT_STACK.with(|stack| stack.effects.write().push(effect));
-        }
-        state.inner.value.set(SignalData {
-            subscribers: Default::default(),
-            update_any: schedule_update_any(),
-            value: f(),
-            effect_ref: get_effect_ref(),
-        });
-        {
-            EFFECT_STACK.with(|stack| stack.effects.write().pop());
-        }
-
-        let invalid_id = effect.id();
-        tracing::trace!("Creating effect: {:?}", invalid_id);
-        effect.inner.value.set(EffectInner {
-            callback: Box::new(move || {
-                let value = f();
-                let changed = {
-                    let old = state.inner.read();
-                    value != old.value
-                };
-                if changed {
-                    state.set(value)
-                }
-            }),
-            id: invalid_id,
-        });
-        {
-            EFFECT_STACK.with(|stack| stack.effect_mapping.write().insert(invalid_id, effect));
-        }
-
-        ReadOnlySignal::new_maybe_sync(state)
-    }
-}
-
 impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
-    /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
-    #[track_caller]
-    #[tracing::instrument(skip(value))]
-    pub fn new_maybe_sync(value: T) -> Self {
-        Self {
-            inner: CopyValue::<SignalData<T>, S>::new_maybe_sync(SignalData {
-                subscribers: Default::default(),
-                update_any: schedule_update_any(),
-                value,
-                effect_ref: get_effect_ref(),
-            }),
-        }
-    }
-
-    /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
-    fn new_with_caller(
-        value: T,
-        #[cfg(debug_assertions)] caller: &'static std::panic::Location<'static>,
-    ) -> Self {
-        Self {
-            inner: CopyValue::new_with_caller(
-                SignalData {
-                    subscribers: Default::default(),
-                    update_any: schedule_update_any(),
-                    value,
-                    effect_ref: get_effect_ref(),
-                },
-                #[cfg(debug_assertions)]
-                caller,
-            ),
-        }
-    }
-
-    /// Create a new signal with a custom owner scope. The signal will be dropped when the owner scope is dropped instead of the current scope.
-    #[track_caller]
-    #[tracing::instrument(skip(value))]
-    pub fn new_maybe_sync_in_scope(value: T, owner: ScopeId) -> Self {
-        Self {
-            inner: CopyValue::<SignalData<T>, S>::new_maybe_sync_in_scope(
-                SignalData {
-                    subscribers: Default::default(),
-                    update_any: schedule_update_any(),
-                    value,
-                    effect_ref: get_effect_ref(),
-                },
-                owner,
-            ),
-        }
-    }
-
     /// Get the scope the signal was created in.
     pub fn origin_scope(&self) -> ScopeId {
         self.inner.origin_scope()
@@ -356,7 +203,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     ///
     /// If the signal has been dropped, this will panic.
     #[track_caller]
-    pub fn read(&self) -> S::Ref<T> {
+    pub fn read<'a>(&'a self) -> S::Ref<'a, T> {
         let inner = self.inner.read();
         if let Some(effect) = EFFECT_STACK.with(|stack| stack.current()) {
             let subscribers = inner.subscribers.read();
@@ -383,13 +230,14 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
                 }
             }
         }
+
         S::map(inner, |v| &v.value)
     }
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
     ///
     /// If the signal has been dropped, this will panic.
-    pub fn peek(&self) -> S::Ref<T> {
+    pub fn peek<'a>(&'a self) -> S::Ref<'a, T> {
         let inner = self.inner.read();
         S::map(inner, |v| &v.value)
     }
@@ -476,10 +324,10 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
         f(&mut *write)
     }
 
-    /// Map the signal to a new type.
-    pub fn map<O>(self, f: impl Fn(&T) -> &O + 'static) -> MappedSignal<S::Ref<O>> {
-        MappedSignal::new(self, f)
-    }
+    // /// Map the signal to a new type.
+    // pub fn map<'a, O>(self, f: impl Fn(&T) -> &O + 'static) -> MappedSignal<S::Ref<'a, O>> {
+    //     MappedSignal::new(self, f)
+    // }
 
     /// Get the generational id of the signal.
     pub fn id(&self) -> generational_box::GenerationalBoxId {
@@ -570,15 +418,15 @@ impl<T: 'static, S: Storage<SignalData<T>>> Drop for SignalSubscriberDrop<T, S> 
 /// B is the dynamically checked type of the write (RefMut)
 /// S is the storage type of the signal
 /// I is the type of the original signal
-pub struct Write<T: 'static, S: Storage<SignalData<I>> = UnsyncStorage, I: 'static = T> {
-    write: S::Mut<T>,
+pub struct Write<'a, T: 'static, S: Storage<SignalData<I>> = UnsyncStorage, I: 'static = T> {
+    write: S::Mut<'a, T>,
     signal: SignalSubscriberDrop<I, S>,
     phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: 'static, S: Storage<SignalData<I>>, I: 'static> Write<T, S, I> {
+impl<'a, T: 'static, S: Storage<SignalData<I>>, I: 'static> Write<'a, T, S, I> {
     /// Map the mutable reference to the signal's value to a new type.
-    pub fn map<O>(myself: Self, f: impl FnOnce(&mut T) -> &mut O) -> Write<O, S, I> {
+    pub fn map<O>(myself: Self, f: impl FnOnce(&mut T) -> &mut O) -> Write<'a, O, S, I> {
         let Self { write, signal, .. } = myself;
         Write {
             write: S::map_mut(write, f),
@@ -591,7 +439,7 @@ impl<T: 'static, S: Storage<SignalData<I>>, I: 'static> Write<T, S, I> {
     pub fn filter_map<O>(
         myself: Self,
         f: impl FnOnce(&mut T) -> Option<&mut O>,
-    ) -> Option<Write<O, S, I>> {
+    ) -> Option<Write<'a, O, S, I>> {
         let Self { write, signal, .. } = myself;
         let write = S::try_map_mut(write, f);
         write.map(|write| Write {
@@ -602,7 +450,7 @@ impl<T: 'static, S: Storage<SignalData<I>>, I: 'static> Write<T, S, I> {
     }
 }
 
-impl<T: 'static, S: Storage<SignalData<I>>, I: 'static> Deref for Write<T, S, I> {
+impl<'a, T: 'static, S: Storage<SignalData<I>>, I: 'static> Deref for Write<'a, T, S, I> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -610,121 +458,109 @@ impl<T: 'static, S: Storage<SignalData<I>>, I: 'static> Deref for Write<T, S, I>
     }
 }
 
-impl<T, S: Storage<SignalData<I>>, I> DerefMut for Write<T, S, I> {
+impl<'a, T, S: Storage<SignalData<I>>, I> DerefMut for Write<'a, T, S, I> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.write
     }
 }
 
-/// A signal that can only be read from.
-pub struct ReadOnlySignal<T: 'static, S: Storage<SignalData<T>> = UnsyncStorage> {
-    inner: Signal<T, S>,
+impl<T: PartialEq + 'static> Signal<T> {
+    // /// Creates a new global Signal that can be used in a global static.
+    // pub const fn global_memo(constructor: fn() -> T) -> GlobalMemo<T>
+    // where
+    //     T: PartialEq,
+    // {
+    //     GlobalMemo::new(constructor)
+    // }
+
+    //     /// Creates a new unsync Selector. The selector will be run immediately and whenever any signal it reads changes.
+    //     ///
+    //     /// Selectors can be used to efficiently compute derived data from signals.
+    //     #[track_caller]
+    //     pub fn selector(f: impl FnMut() -> T + 'static) -> ReadOnlySignal<T> {
+    //         Self::maybe_sync_memo(f)
+    //     }
+
+    //     /// Creates a new Selector that may be Sync + Send. The selector will be run immediately and whenever any signal it reads changes.
+    //     ///
+    //     /// Selectors can be used to efficiently compute derived data from signals.
+    //     #[track_caller]
+    //     pub fn maybe_sync_memo<S: Storage<SignalData<T>>>(
+    //         mut f: impl FnMut() -> T + 'static,
+    //     ) -> ReadOnlySignal<T, S> {
+    //         let mut state = Signal::<T, S> {
+    //             inner: CopyValue::invalid(),
+    //         };
+    //         let effect = Effect {
+    //             source: current_scope_id().expect("in a virtual dom"),
+    //             inner: CopyValue::invalid(),
+    //         };
+
+    //         {
+    //             EFFECT_STACK.with(|stack| stack.effects.write().push(effect));
+    //         }
+    //         state.inner.value.set(SignalData {
+    //             subscribers: Default::default(),
+    //             update_any: schedule_update_any(),
+    //             value: f(),
+    //             effect_ref: get_effect_ref(),
+    //         });
+    //         {
+    //             EFFECT_STACK.with(|stack| stack.effects.write().pop());
+    //         }
+
+    //         let invalid_id = effect.id();
+    //         tracing::trace!("Creating effect: {:?}", invalid_id);
+    //         effect.inner.value.set(EffectInner {
+    //             callback: Box::new(move || {
+    //                 let value = f();
+    //                 let changed = {
+    //                     let old = state.inner.read();
+    //                     value != old.value
+    //                 };
+    //                 if changed {
+    //                     state.set(value)
+    //                 }
+    //             }),
+    //             id: invalid_id,
+    //         });
+    //         {
+    //             EFFECT_STACK.with(|stack| stack.effect_mapping.write().insert(invalid_id, effect));
+    //         }
+
+    //         ReadOnlySignal::new_maybe_sync(state)
+    //     }
 }
 
-impl<T: 'static, S: Storage<SignalData<T>>> From<Signal<T, S>> for ReadOnlySignal<T, S> {
-    fn from(inner: Signal<T, S>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<T: 'static> ReadOnlySignal<T> {
-    /// Create a new read-only signal.
-    #[track_caller]
-    pub fn new(signal: Signal<T>) -> Self {
-        Self::new_maybe_sync(signal)
-    }
-}
-
-impl<T: 'static, S: Storage<SignalData<T>>> ReadOnlySignal<T, S> {
-    /// Create a new read-only signal that is maybe sync.
-    #[track_caller]
-    pub fn new_maybe_sync(signal: Signal<T, S>) -> Self {
-        Self { inner: signal }
-    }
-
-    /// Get the scope that the signal was created in.
-    pub fn origin_scope(&self) -> ScopeId {
-        self.inner.origin_scope()
-    }
-
-    /// Get the current value of the signal. This will subscribe the current scope to the signal.
-    ///
-    /// If the signal has been dropped, this will panic.
-    #[track_caller]
-    pub fn read(&self) -> S::Ref<T> {
-        self.inner.read()
-    }
-
-    /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
-    ///
-    /// If the signal has been dropped, this will panic.
-    pub fn peek(&self) -> S::Ref<T> {
-        self.inner.peek()
-    }
-
-    /// Run a closure with a reference to the signal's value.
-    #[track_caller]
-    pub fn with<O>(&self, f: impl FnOnce(&T) -> O) -> O {
-        self.inner.with(f)
-    }
-
-    /// Get the id of the signal.
-    pub fn id(&self) -> generational_box::GenerationalBoxId {
-        self.inner.id()
-    }
-}
-
-impl<T> IntoAttributeValue for ReadOnlySignal<T>
-where
-    T: Clone + IntoAttributeValue,
-{
-    fn into_value(self) -> dioxus_core::AttributeValue {
-        self.with(|f| f.clone().into_value())
-    }
-}
-
-impl<T: Clone + 'static, S: Storage<SignalData<T>>> ReadOnlySignal<T, S> {
-    /// Get the current value of the signal. This will subscribe the current scope to the signal.
-    pub fn value(&self) -> T {
-        self.read().clone()
-    }
-}
-
-impl<T: 'static, S: Storage<SignalData<T>>> PartialEq for ReadOnlySignal<T, S> {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize + 'static> serde::Serialize for Signal<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.read().serialize(serializer)
     }
 }
 
-impl<T: Clone, S: Storage<SignalData<T>> + 'static> Deref for ReadOnlySignal<T, S> {
-    type Target = dyn Fn() -> T;
-
-    fn deref(&self) -> &Self::Target {
-        // https://github.com/dtolnay/case-studies/tree/master/callable-types
-
-        // First we create a closure that captures something with the Same in memory layout as Self (MaybeUninit<Self>).
-        let uninit_callable = MaybeUninit::<Self>::uninit();
-        // Then move that value into the closure. We assume that the closure now has a in memory layout of Self.
-        let uninit_closure = move || Self::read(unsafe { &*uninit_callable.as_ptr() }).clone();
-
-        // Check that the size of the closure is the same as the size of Self in case the compiler changed the layout of the closure.
-        let size_of_closure = std::mem::size_of_val(&uninit_closure);
-        assert_eq!(size_of_closure, std::mem::size_of::<Self>());
-
-        // Then cast the lifetime of the closure to the lifetime of &self.
-        fn cast_lifetime<'a, T>(_a: &T, b: &'a T) -> &'a T {
-            b
-        }
-        let reference_to_closure = cast_lifetime(
-            {
-                // The real closure that we will never use.
-                &uninit_closure
-            },
-            // We transmute self into a reference to the closure. This is safe because we know that the closure has the same memory layout as Self so &Closure == &Self.
-            unsafe { std::mem::transmute(self) },
-        );
-
-        // Cast the closure to a trait object.
-        reference_to_closure as &Self::Target
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de> + 'static> serde::Deserialize<'de> for Signal<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::new(T::deserialize(deserializer)?))
     }
 }
+
+// impl<T: 'static> Signal<T> {
+//     /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
+//     #[track_caller]
+//     pub fn new(value: T) -> Self {
+//         Self::new_maybe_sync(value)
+//     }
+
+//     /// Create a new signal with a custom owner scope. The signal will be dropped when the owner scope is dropped instead of the current scope.
+//     #[track_caller]
+//     pub fn new_in_scope(value: T, owner: ScopeId) -> Self {
+//         Self::new_maybe_sync_in_scope(value, owner)
+//     }
+
+//     /// Creates a new global Signal that can be used in a global static.
+//     pub const fn global(constructor: fn() -> T) -> GlobalSignal<T> {
+//         GlobalSignal::new(constructor)
+//     }
+// }

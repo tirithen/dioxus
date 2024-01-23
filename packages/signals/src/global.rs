@@ -325,3 +325,85 @@ impl<T: PartialEq + Clone + 'static> Deref for GlobalMemo<T> {
         reference_to_closure as &Self::Target
     }
 }
+
+read_impls!(GlobalSignal);
+
+impl<T: 'static> GlobalSignal<Vec<T>> {
+    /// Read a value from the inner vector.
+    pub fn get(&'static self, index: usize) -> Option<GenerationalRef<Ref<'static, T>>> {
+        <UnsyncStorage as Storage>::try_map(self.read(), move |v| v.get(index))
+    }
+}
+
+impl<T: 'static> GlobalSignal<Option<T>> {
+    /// Unwraps the inner value and clones it.
+    pub fn unwrap(&'static self) -> T
+    where
+        T: Clone,
+    {
+        self.with(|v| v.clone()).unwrap()
+    }
+
+    /// Attempts to read the inner value of the Option.
+    pub fn as_ref(&'static self) -> Option<GenerationalRef<Ref<'static, T>>> {
+        <UnsyncStorage as Storage>::try_map(self.read(), |v| v.as_ref())
+    }
+}
+
+write_vec_impls!(GlobalSignal);
+
+impl<T: 'static> GlobalSignal<Option<T>> {
+    /// Takes the value out of the Option.
+    pub fn take(&self) -> Option<T> {
+        self.with_mut(|v| v.take())
+    }
+
+    /// Replace the value in the Option.
+    pub fn replace(&self, value: T) -> Option<T> {
+        self.with_mut(|v| v.replace(value))
+    }
+
+    /// Gets the value out of the Option, or inserts the given value if the Option is empty.
+    pub fn get_or_insert(&self, default: T) -> GenerationalRef<Ref<'static, T>> {
+        self.get_or_insert_with(|| default)
+    }
+
+    /// Gets the value out of the Option, or inserts the value returned by the given function if the Option is empty.
+    pub fn get_or_insert_with(
+        &self,
+        default: impl FnOnce() -> T,
+    ) -> GenerationalRef<Ref<'static, T>> {
+        let borrow = self.read();
+        if borrow.is_none() {
+            drop(borrow);
+            self.with_mut(|v| *v = Some(default()));
+            <UnsyncStorage as Storage>::map(self.read(), |v| v.as_ref().unwrap())
+        } else {
+            <UnsyncStorage as Storage>::map(borrow, |v| v.as_ref().unwrap())
+        }
+    }
+}
+
+read_impls!(GlobalMemo: PartialEq);
+
+impl<T: PartialEq + 'static> GlobalMemo<Vec<T>> {
+    /// Read a value from the inner vector.
+    pub fn get(&'static self, index: usize) -> Option<GenerationalRef<Ref<'static, T>>> {
+        <UnsyncStorage as Storage>::try_map(self.read(), move |v| v.get(index))
+    }
+}
+
+impl<T: PartialEq + 'static> GlobalMemo<Option<T>> {
+    /// Unwraps the inner value and clones it.
+    pub fn unwrap(&'static self) -> T
+    where
+        T: Clone,
+    {
+        self.with(|v| v.clone()).unwrap()
+    }
+
+    /// Attempts to read the inner value of the Option.
+    pub fn as_ref(&'static self) -> Option<GenerationalRef<Ref<'static, T>>> {
+        <UnsyncStorage as Storage>::try_map(self.read(), |v| v.as_ref())
+    }
+}
