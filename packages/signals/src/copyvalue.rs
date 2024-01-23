@@ -9,6 +9,14 @@ use dioxus_core::ScopeId;
 
 use generational_box::{GenerationalBox, Storage};
 
+use crate::Hoist;
+
+pub fn use_generational_box<T: 'static, S: Storage<T>>(
+    f: impl FnOnce() -> T,
+) -> GenerationalBox<T, S> {
+    use_hook_with_drop(|| GenerationalBox::new(f()), |value| value.dispose())
+}
+
 /// Create a new CopyValue. The value will be stored in the current component.
 ///
 /// When this component drops, the CopyValue will also be dropped
@@ -53,6 +61,7 @@ impl<T: 'static, S: Storage<T>> CopyValue<T, S> {
         }
     }
 
+    /// Create a new CopyValue. The value will be stored in the current component.
     pub(crate) fn new_with_caller(
         value: T,
         #[cfg(debug_assertions)] caller: &'static std::panic::Location<'static>,
@@ -100,6 +109,7 @@ impl<T: 'static, S: Storage<T>> CopyValue<T, S> {
         self.value.write()
     }
 
+    /// Write the value as a static reference. If the value has been dropped, this will panic.
     #[track_caller]
     pub fn write_static_ref(&self) -> S::Mut<'static, T> {
         self.value.write()

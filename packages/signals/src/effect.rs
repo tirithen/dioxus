@@ -128,10 +128,11 @@ impl Effect {
     /// Run the effect callback immediately. Returns `true` if the effect was run. Returns `false` is the effect is dead.
     pub fn try_run(&mut self) {
         tracing::trace!("Running effect: {:?}", self);
+        let _cloned = self.clone();
         if let Ok(mut inner) = self.inner.try_write() {
             {
                 EFFECT_STACK.with(|stack| {
-                    stack.effects.write().push(*self);
+                    stack.effects.write().push(_cloned);
                 });
             }
             (inner.callback)();

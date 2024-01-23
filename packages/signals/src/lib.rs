@@ -4,6 +4,9 @@
 #![warn(missing_docs)]
 #![allow(clippy::type_complexity)]
 
+mod hoist;
+pub use hoist::*;
+
 mod macros;
 pub use macros::*;
 
@@ -16,8 +19,8 @@ pub use effect::*;
 mod write_guard;
 pub use write_guard::*;
 
-mod selector;
-pub use selector::*;
+mod memo;
+pub use memo::*;
 
 pub(crate) mod signal;
 pub use signal::*;
@@ -28,14 +31,14 @@ pub use readonly_signal::*;
 // mod dependency;
 // pub use dependency::*;
 
+// mod comparer;
+// pub use comparer::*;
+
 mod map;
 pub use map::*;
 
 mod copyvalue;
 pub use copyvalue::*;
-
-// mod comparer;
-// pub use comparer::*;
 
 mod global;
 pub use global::*;

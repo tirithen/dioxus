@@ -77,14 +77,14 @@ impl<T: 'static> GlobalSignal<T> {
     /// If the signal has been dropped, this will panic.
     #[track_caller]
     pub fn read(&self) -> GenerationalRef<Ref<'static, T>> {
-        self.signal().read()
+        self.signal().read_static_ref()
     }
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
     ///
     /// If the signal has been dropped, this will panic.
     pub fn peek(&self) -> GenerationalRef<Ref<'static, T>> {
-        self.signal().peek()
+        self.signal().peek_static()
     }
 
     /// Get a mutable reference to the signal's value.
@@ -245,14 +245,14 @@ impl<T: PartialEq + 'static> GlobalMemo<T> {
     /// If the signal has been dropped, this will panic.
     #[track_caller]
     pub fn read(&self) -> GenerationalRef<Ref<'static, T>> {
-        self.signal().read()
+        self.signal().inner.read_static_ref()
     }
 
     /// Get the current value of the signal. **Unlike read, this will not subscribe the current scope to the signal which can cause parts of your UI to not update.**
     ///
     /// If the signal has been dropped, this will panic.
     pub fn peek(&self) -> GenerationalRef<Ref<'static, T>> {
-        self.signal().peek()
+        self.signal().inner.peek_static()
     }
 
     /// Run a closure with a reference to the signal's value.

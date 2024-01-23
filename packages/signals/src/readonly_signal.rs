@@ -1,3 +1,5 @@
+//! A signal that can only be read from.
+
 use crate::rules::read_impls;
 use crate::{Signal, SignalData};
 use dioxus_core::{prelude::IntoAttributeValue, ScopeId};
@@ -7,7 +9,7 @@ use std::{mem::MaybeUninit, ops::Deref};
 
 /// A signal that can only be read from.
 pub struct ReadOnlySignal<T: 'static, S: Storage<SignalData<T>> = UnsyncStorage> {
-    inner: Signal<T, S>,
+    pub(crate) inner: Signal<T, S>,
 }
 
 impl<T: 'static, S: Storage<SignalData<T>>> ReadOnlySignal<T, S> {
@@ -17,10 +19,10 @@ impl<T: 'static, S: Storage<SignalData<T>>> ReadOnlySignal<T, S> {
         Self { inner: signal }
     }
 
-    /// Get the scope that the signal was created in.
-    pub fn origin_scope(&self) -> ScopeId {
-        self.inner.origin_scope()
-    }
+    // /// Get the scope that the signal was created in.
+    // pub fn origin_scope(&self) -> ScopeId {
+    //     self.inner.origin_scope()
+    // }
 
     /// Get the current value of the signal. This will subscribe the current scope to the signal.
     ///

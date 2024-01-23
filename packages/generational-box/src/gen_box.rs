@@ -43,6 +43,11 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
     ///
     /// Any future reads or writes will fail via panic
     pub fn dispose(&self) {
+        // If the value is already invalid, don't do anything - not to risk wiping away a valid signal
+        if !self.validate() {
+            return;
+        }
+
         // Wipe away the data.
         self.raw.data.dispose(self.raw);
 
@@ -78,6 +83,28 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
         }
     }
 
+    /// Returns true if the pointer is equal to the other pointer.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.raw.data.data_ptr() == other.raw.data.data_ptr() && self.generation == other.generation
+    }
+
+    /// Set the value. Panics if the value is no longer valid.
+    pub fn set(&self, value: T) {
+        self.validate().then(|| self.raw.data.set(value));
+    }
+
+    /// Read the value. Panics if the value is no longer valid.
+    #[track_caller]
+    pub fn read<'a>(&self) -> S::Ref<'a, T> {
+        self.try_read().unwrap()
+    }
+
+    /// Write the value. Panics if the value is no longer valid.
+    #[track_caller]
+    pub fn write<'a>(&self) -> S::Mut<'a, T> {
+        self.try_write().unwrap()
+    }
+
     /// Try to read the value. Returns None if the value is no longer valid.
     #[track_caller]
     pub fn try_read<'a>(&self) -> Result<S::Ref<'a, T>, BorrowError> {
@@ -103,12 +130,6 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
         result
     }
 
-    /// Read the value. Panics if the value is no longer valid.
-    #[track_caller]
-    pub fn read<'a>(&self) -> S::Ref<'a, T> {
-        self.try_read().unwrap()
-    }
-
     /// Try to write the value. Returns None if the value is no longer valid.
     #[track_caller]
     pub fn try_write<'a>(&self) -> Result<S::Mut<'a, T>, BorrowMutError> {
@@ -129,31 +150,14 @@ impl<T: 'static, S: Storage<T>> GenerationalBox<T, S> {
 
         result
     }
-
-    /// Write the value. Panics if the value is no longer valid.
-    #[track_caller]
-    pub fn write<'a>(&self) -> S::Mut<'a, T> {
-        self.try_write().unwrap()
-    }
-
-    /// Set the value. Panics if the value is no longer valid.
-    pub fn set(&self, value: T) {
-        self.validate().then(|| self.raw.data.set(value));
-    }
-
-    /// Returns true if the pointer is equal to the other pointer.
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        self.raw.data.data_ptr() == other.raw.data.data_ptr() && self.generation == other.generation
-    }
 }
-
-impl<T, S: 'static> Copy for GenerationalBox<T, S> {}
 
 impl<T, S> Clone for GenerationalBox<T, S> {
     fn clone(&self) -> Self {
         *self
     }
 }
+impl<T, S: 'static> Copy for GenerationalBox<T, S> {}
 
 impl<T: 'static, S: Storage<T>> std::fmt::Debug for GenerationalBox<T, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -3,8 +3,8 @@ use crate::Signal;
 use crate::SignalData;
 use dioxus_core::ScopeId;
 use generational_box::Storage;
-use std::fmt::Debug;
 use std::fmt::Display;
+use std::{clone::Clone, fmt::Debug};
 
 /// A read only signal that has been mapped to a new type.
 pub struct MappedSignal<U: 'static + ?Sized> {
@@ -61,7 +61,7 @@ impl<U: ?Sized> PartialEq for MappedSignal<U> {
     }
 }
 
-impl<U> std::clone::Clone for MappedSignal<U> {
+impl<U> Clone for MappedSignal<U> {
     fn clone(&self) -> Self {
         *self
     }

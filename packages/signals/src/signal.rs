@@ -1,7 +1,7 @@
 // use crate::{Effect, EffectInner, GlobalMemo, GlobalSignal, MappedSignal};
 use crate::{
-    get_effect_ref, Effect, EffectInner, EffectStackRef, GlobalMemo, ReadOnlySignal,
-    SignalSubscriberDrop, EFFECT_STACK,
+    get_effect_ref, use_generational_box, Effect, EffectInner, EffectStackRef, GlobalMemo,
+    ReadOnlySignal, SignalSubscriberDrop, EFFECT_STACK,
 };
 use crate::{use_copy_value, write_guard::Write, CopyValue};
 use dioxus_core::{
@@ -10,7 +10,7 @@ use dioxus_core::{
     },
     ScopeId,
 };
-use generational_box::{GenerationalBoxId, Storage, SyncStorage, UnsyncStorage};
+use generational_box::{GenerationalBox, GenerationalBoxId, Storage, SyncStorage, UnsyncStorage};
 use parking_lot::RwLock;
 use std::{
     cell::RefCell,
@@ -58,7 +58,7 @@ pub fn use_signal<T: 'static>(f: impl FnOnce() -> T) -> Signal<T, UnsyncStorage>
     #[cfg(debug_assertions)]
     let caller = std::panic::Location::caller();
 
-    let inner = use_copy_value(|| SignalData {
+    let inner = use_generational_box(|| SignalData {
         value: f(),
         subscribers: Default::default(),
         update_any: schedule_update_any(),
@@ -108,7 +108,7 @@ pub fn use_signal_sync<T: Send + Sync + 'static>(f: impl FnOnce() -> T) -> Signa
     #[cfg(debug_assertions)]
     let caller = std::panic::Location::caller();
 
-    let inner = use_copy_value(|| SignalData {
+    let inner = use_generational_box(|| SignalData {
         value: f(),
         subscribers: Default::default(),
         update_any: schedule_update_any(),
@@ -151,7 +151,7 @@ pub fn use_signal_sync<T: Send + Sync + 'static>(f: impl FnOnce() -> T) -> Signa
 /// }
 /// ```
 pub struct Signal<T: 'static, S: 'static = UnsyncStorage> {
-    pub(crate) inner: CopyValue<SignalData<T>, S>,
+    pub(crate) inner: GenerationalBox<SignalData<T>, S>,
 }
 
 /// A signal that can safely shared between threads.
@@ -187,9 +187,8 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
         // Signal { inner }
     }
 
-    /// Get the scope the signal was created in.
     pub fn origin_scope(&self) -> ScopeId {
-        self.inner.origin_scope()
+        todo!()
     }
 
     /// Get the current value of the signal. This will subscribe the current scope to the signal.  If you would like to read the signal without subscribing to it, you can use [`Self::peek`] instead.
@@ -202,9 +201,10 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
         S::map(inner, |v| &v.value)
     }
 
+    /// Read the current value and produce a Ref that's unbounded. This is limitedly uself
     #[track_caller]
     pub fn read_static_ref(&self) -> S::Ref<'static, T> {
-        let inner = self.inner.read_static_ref();
+        let inner = self.inner.read();
         self.read_tracking_subscriptions(&inner);
         S::map(inner, |v| &v.value)
     }
@@ -223,11 +223,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
         } else if let Some(current_scope_id) = current_scope_id() {
             // only subscribe if the vdom is rendering
             if dioxus_core::vdom_is_rendering() {
-                tracing::trace!(
-                    "{:?} subscribed to {:?}",
-                    self.inner.value,
-                    current_scope_id
-                );
+                tracing::trace!("{:?} subscribed to {:?}", self.inner, current_scope_id);
                 let subscribers = inner.subscribers.read();
                 if !subscribers.subscribers.contains(&current_scope_id) {
                     drop(subscribers);
@@ -244,8 +240,11 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     ///
     /// If the signal has been dropped, this will panic.
     pub fn peek<'a>(&'a self) -> S::Ref<'a, T> {
-        let inner = self.inner.read();
-        S::map(inner, |v| &v.value)
+        S::map(self.inner.read(), |v| &v.value)
+    }
+
+    pub fn peek_static(&self) -> S::Ref<'static, T> {
+        S::map(self.inner.read(), |v| &v.value)
     }
 
     /// Get a mutable reference to the signal's value.
@@ -265,7 +264,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     #[track_caller]
     pub fn write_unchecked(&self) -> Write<'static, T, S> {
         Write {
-            write: S::map_mut(self.inner.write_static_ref(), |v| &mut v.value),
+            write: S::map_mut(self.inner.write(), |v| &mut v.value),
             signal: SignalSubscriberDrop(*self),
         }
     }
@@ -276,7 +275,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
             for &scope_id in &*inner.subscribers.read().subscribers {
                 tracing::trace!(
                     "Write on {:?} triggered update on {:?}",
-                    self.inner.value,
+                    self.inner,
                     scope_id
                 );
                 (inner.update_any)(scope_id);
@@ -290,11 +289,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
         };
         let effect_ref = &self_read.effect_ref;
         for effect in subscribers {
-            tracing::trace!(
-                "Write on {:?} triggered effect {:?}",
-                self.inner.value,
-                effect
-            );
+            tracing::trace!("Write on {:?} triggered effect {:?}", self.inner, effect);
             effect_ref.rerun_effect(effect);
         }
     }
@@ -362,13 +357,13 @@ impl<T: Clone + 'static, S: Storage<SignalData<T>>> Signal<T, S> {
 impl<S: Storage<SignalData<bool>>> Signal<bool, S> {
     /// Invert the boolean value of the signal. This will trigger an update on all subscribers.
     pub fn toggle(&mut self) {
-        self.set(!self.cloned());
+        self.with_mut(|v| *v = !*v)
     }
 }
 
 impl<T: 'static, S: Storage<SignalData<T>>> PartialEq for Signal<T, S> {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
+        self.inner.ptr_eq(&other.inner)
     }
 }
 
@@ -459,7 +454,7 @@ impl<T: PartialEq + 'static> Signal<T> {
         mut f: impl FnMut() -> T + 'static,
     ) -> ReadOnlySignal<T, S> {
         let mut state = Signal::<T, S> {
-            inner: CopyValue::invalid(),
+            inner: GenerationalBox::claim(),
         };
         let effect = Effect {
             source: current_scope_id().expect("in a virtual dom"),
@@ -469,7 +464,7 @@ impl<T: PartialEq + 'static> Signal<T> {
         {
             EFFECT_STACK.with(|stack| stack.effects.write().push(effect));
         }
-        state.inner.value.set(SignalData {
+        state.inner.set(SignalData {
             subscribers: Default::default(),
             update_any: schedule_update_any(),
             value: f(),

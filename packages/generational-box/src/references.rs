@@ -11,7 +11,7 @@ pub struct GenerationalRef<R> {
     pub(crate) borrow: GenerationalRefBorrowInfo,
 }
 
-impl<T: 'static, R: Deref<Target = T>> GenerationalRef<R> {
+impl<R> GenerationalRef<R> {
     pub(crate) fn new(inner: R, borrow: GenerationalRefBorrowInfo) -> Self {
         Self { inner, borrow }
     }

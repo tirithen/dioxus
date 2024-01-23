@@ -10,8 +10,8 @@ thread_local! {
 }
 
 impl<T: 'static> Storage<T> for UnsyncStorage {
-    type Ref<'a, R: ?Sized + 'static> = GenerationalRef<Ref<'static, R>>;
-    type Mut<'a, W: ?Sized + 'static> = GenerationalRefMut<RefMut<'static, W>>;
+    type Ref<'a, R: ?Sized + 'static> = GenerationalRef<Ref<'a, R>>;
+    type Mut<'a, W: ?Sized + 'static> = GenerationalRefMut<RefMut<'a, W>>;
 
     fn claim() -> &'static MemoryLocation<Self> {
         UNSYNC_RUNTIME.with(|runtime| {
@@ -74,7 +74,7 @@ impl<T: 'static> Storage<T> for UnsyncStorage {
             .map(|guard| GenerationalRefMut::new(guard, at))
     }
 
-    fn try_map<'a, I, U: ?Sized + 'static>(
+    fn try_map<'a, I: 'static, U: ?Sized + 'static>(
         _self: Self::Ref<'a, I>,
         f: impl FnOnce(&I) -> Option<&U>,
     ) -> Option<Self::Ref<'a, U>> {
@@ -84,7 +84,7 @@ impl<T: 'static> Storage<T> for UnsyncStorage {
             .map(|inner| GenerationalRef { inner, borrow })
     }
 
-    fn try_map_mut<'a, I, U: ?Sized + 'static>(
+    fn try_map_mut<'a, I: 'static, U: ?Sized + 'static>(
         mut_ref: Self::Mut<'a, I>,
         f: impl FnOnce(&mut I) -> Option<&mut U>,
     ) -> Option<Self::Mut<'a, U>> {
