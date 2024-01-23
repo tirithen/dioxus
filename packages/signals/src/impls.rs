@@ -1,5 +1,6 @@
 use crate::copyvalue::CopyValue;
-use crate::signal::{Signal, Write};
+use crate::signal::Signal;
+use crate::write_guard::Write;
 use crate::SignalData;
 use generational_box::Storage;
 use generational_box::{GenerationalRef, UnsyncStorage};

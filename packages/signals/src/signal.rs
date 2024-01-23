@@ -1,6 +1,6 @@
 // use crate::{Effect, EffectInner, GlobalMemo, GlobalSignal, MappedSignal};
-use crate::{get_effect_ref, EffectStackRef, EFFECT_STACK};
-use crate::{use_copy_value, CopyValue};
+use crate::{get_effect_ref, EffectStackRef, SignalSubscriberDrop, EFFECT_STACK};
+use crate::{use_copy_value, write_guard::Write, CopyValue};
 use dioxus_core::{
     prelude::{
         current_scope_id, has_context, provide_context, schedule_update_any, IntoAttributeValue,
@@ -115,45 +115,6 @@ pub fn use_signal_sync<T: Send + Sync + 'static>(f: impl FnOnce() -> T) -> Signa
     Signal { inner }
 }
 
-struct Unsubscriber {
-    scope: ScopeId,
-    subscribers: UnsubscriberArray,
-}
-
-type UnsubscriberArray = Vec<Rc<RefCell<Vec<ScopeId>>>>;
-
-impl Drop for Unsubscriber {
-    fn drop(&mut self) {
-        for subscribers in &self.subscribers {
-            subscribers.borrow_mut().retain(|s| *s != self.scope);
-        }
-    }
-}
-
-fn current_unsubscriber() -> Rc<RefCell<Unsubscriber>> {
-    match has_context::<Rc<RefCell<Unsubscriber>>>() {
-        Some(rt) => rt,
-        None => provide_context(Rc::new(RefCell::new(Unsubscriber {
-            scope: current_scope_id().expect("in a virtual dom"),
-            subscribers: Default::default(),
-        }))),
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct SignalSubscribers {
-    pub(crate) subscribers: Vec<ScopeId>,
-    pub(crate) effect_subscribers: Vec<GenerationalBoxId>,
-}
-
-/// The data stored for tracking in a signal.
-pub struct SignalData<T> {
-    pub(crate) subscribers: Arc<RwLock<SignalSubscribers>>,
-    pub(crate) update_any: Arc<dyn Fn(ScopeId) + Sync + Send>,
-    pub(crate) effect_ref: EffectStackRef,
-    pub(crate) value: T,
-}
-
 /// Creates a new Signal. Signals are a Copy state management solution with automatic dependency tracking.
 ///
 /// ```rust
@@ -186,12 +147,26 @@ pub struct SignalData<T> {
 ///     }
 /// }
 /// ```
-pub struct Signal<T: 'static, S: Storage<SignalData<T>> = UnsyncStorage> {
+pub struct Signal<T: 'static, S: 'static = UnsyncStorage> {
     pub(crate) inner: CopyValue<SignalData<T>, S>,
 }
 
 /// A signal that can safely shared between threads.
 pub type SyncSignal<T> = Signal<T, SyncStorage>;
+
+/// The data stored for tracking in a signal.
+pub struct SignalData<T> {
+    pub(crate) subscribers: Arc<RwLock<SignalSubscribers>>,
+    pub(crate) update_any: Arc<dyn Fn(ScopeId) + Sync + Send>,
+    pub(crate) effect_ref: EffectStackRef,
+    pub(crate) value: T,
+}
+
+#[derive(Default)]
+pub(crate) struct SignalSubscribers {
+    pub(crate) subscribers: Vec<ScopeId>,
+    pub(crate) effect_subscribers: Vec<GenerationalBoxId>,
+}
 
 impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     /// Get the scope the signal was created in.
@@ -205,6 +180,7 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     #[track_caller]
     pub fn read<'a>(&'a self) -> S::Ref<'a, T> {
         let inner = self.inner.read();
+
         if let Some(effect) = EFFECT_STACK.with(|stack| stack.current()) {
             let subscribers = inner.subscribers.read();
             if !subscribers.effect_subscribers.contains(&effect.inner.id()) {
@@ -255,16 +231,13 @@ impl<T: 'static, S: Storage<SignalData<T>>> Signal<T, S> {
     /// This is public since it's useful in many scenarios, but we generally recommend mutation through [`Self::write`] instead.
     #[track_caller]
     pub fn write_unchecked(&self) -> Write<T, S> {
-        let inner = self.inner.write();
-        let borrow = S::map_mut(inner, |v| &mut v.value);
         Write {
-            write: borrow,
-            signal: SignalSubscriberDrop { signal: *self },
-            phantom: std::marker::PhantomData,
+            write: S::map_mut(self.inner.write(), |v| &mut v.value),
+            signal: SignalSubscriberDrop(*self),
         }
     }
 
-    fn update_subscribers(&self) {
+    pub(crate) fn update_subscribers(&self) {
         {
             let inner = self.inner.read();
             for &scope_id in &*inner.subscribers.read().subscribers {
@@ -402,65 +375,28 @@ impl<T: Clone, S: Storage<SignalData<T>> + 'static> Deref for Signal<T, S> {
     }
 }
 
-struct SignalSubscriberDrop<T: 'static, S: Storage<SignalData<T>>> {
-    signal: Signal<T, S>,
+struct Unsubscriber {
+    scope: ScopeId,
+    subscribers: UnsubscriberArray,
 }
 
-impl<T: 'static, S: Storage<SignalData<T>>> Drop for SignalSubscriberDrop<T, S> {
+type UnsubscriberArray = Vec<Rc<RefCell<Vec<ScopeId>>>>;
+
+impl Drop for Unsubscriber {
     fn drop(&mut self) {
-        self.signal.update_subscribers();
-    }
-}
-
-/// A mutable reference to a signal's value.
-///
-/// T is the current type of the write
-/// B is the dynamically checked type of the write (RefMut)
-/// S is the storage type of the signal
-/// I is the type of the original signal
-pub struct Write<'a, T: 'static, S: Storage<SignalData<I>> = UnsyncStorage, I: 'static = T> {
-    write: S::Mut<'a, T>,
-    signal: SignalSubscriberDrop<I, S>,
-    phantom: std::marker::PhantomData<T>,
-}
-
-impl<'a, T: 'static, S: Storage<SignalData<I>>, I: 'static> Write<'a, T, S, I> {
-    /// Map the mutable reference to the signal's value to a new type.
-    pub fn map<O>(myself: Self, f: impl FnOnce(&mut T) -> &mut O) -> Write<'a, O, S, I> {
-        let Self { write, signal, .. } = myself;
-        Write {
-            write: S::map_mut(write, f),
-            signal,
-            phantom: std::marker::PhantomData,
+        for subscribers in &self.subscribers {
+            subscribers.borrow_mut().retain(|s| *s != self.scope);
         }
     }
-
-    /// Try to map the mutable reference to the signal's value to a new type
-    pub fn filter_map<O>(
-        myself: Self,
-        f: impl FnOnce(&mut T) -> Option<&mut O>,
-    ) -> Option<Write<'a, O, S, I>> {
-        let Self { write, signal, .. } = myself;
-        let write = S::try_map_mut(write, f);
-        write.map(|write| Write {
-            write,
-            signal,
-            phantom: PhantomData,
-        })
-    }
 }
 
-impl<'a, T: 'static, S: Storage<SignalData<I>>, I: 'static> Deref for Write<'a, T, S, I> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.write
-    }
-}
-
-impl<'a, T, S: Storage<SignalData<I>>, I> DerefMut for Write<'a, T, S, I> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.write
+fn current_unsubscriber() -> Rc<RefCell<Unsubscriber>> {
+    match has_context::<Rc<RefCell<Unsubscriber>>>() {
+        Some(rt) => rt,
+        None => provide_context(Rc::new(RefCell::new(Unsubscriber {
+            scope: current_scope_id().expect("in a virtual dom"),
+            subscribers: Default::default(),
+        }))),
     }
 }
 

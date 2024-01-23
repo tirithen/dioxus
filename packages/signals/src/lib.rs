@@ -13,6 +13,9 @@ pub use rt::*;
 mod effect;
 pub use effect::*;
 
+mod write_guard;
+pub use write_guard::*;
+
 // mod selector;
 // pub use selector::*;
 
