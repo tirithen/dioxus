@@ -28,6 +28,14 @@ pub struct Event<T: 'static + ?Sized> {
 }
 
 impl<T> Event<T> {
+    /// Create a new event from associated data
+    pub fn new(data: T, propagates: bool) -> Self {
+        Self {
+            data: Rc::new(data),
+            propagates: Rc::new(Cell::new(propagates)),
+        }
+    }
+
     /// Map the event data to a new type
     ///
     /// # Example
