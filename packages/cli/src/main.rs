@@ -70,7 +70,6 @@ async fn main() -> anyhow::Result<()> {
 
         Autoformat(opts) => opts
             .autoformat()
-            .await
             .context(error_wrapper("Error autoformatting RSX")),
 
         Check(opts) => opts
@@ -99,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 
             match action {
                 Build(opts) => opts
-                    .build(Some(bin.clone()), None)
+                    .build(Some(bin.clone()), None, None)
                     .context(error_wrapper("Building project failed")),
 
                 Clean(opts) => opts

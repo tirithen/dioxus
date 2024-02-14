@@ -1,25 +1,50 @@
-#![allow(non_snake_case)]
+//! This example shows how to use the `file` methods on FormEvent and DragEvent to handle file uploads and drops.
+//!
+//! Dioxus intercepts these events and provides a Rusty interface to the file data. Since we want this interface to
+//! be crossplatform,
+
 use dioxus::html::HasFileData;
 use dioxus::prelude::*;
 use tokio::time::sleep;
 
 fn main() {
-    dioxus_desktop::launch(App);
+    launch(app);
 }
 
-fn App(cx: Scope) -> Element {
-    let enable_directory_upload = use_state(cx, || false);
-    let files_uploaded: &UseRef<Vec<String>> = use_ref(cx, Vec::new);
+fn app() -> Element {
+    let mut enable_directory_upload = use_signal(|| false);
+    let mut files_uploaded = use_signal(|| Vec::new() as Vec<String>);
 
-    cx.render(rsx! {
+    let upload_files = move |evt: FormEvent| async move {
+        for file_name in evt.files().unwrap().files() {
+            // no files on form inputs?
+            sleep(std::time::Duration::from_secs(1)).await;
+            files_uploaded.write().push(file_name);
+        }
+    };
+
+    let handle_file_drop = move |evt: DragEvent| async move {
+        if let Some(file_engine) = &evt.files() {
+            let files = file_engine.files();
+            for file_name in &files {
+                if let Some(file) = file_engine.read_file_to_string(file_name).await {
+                    files_uploaded.write().push(file);
+                }
+            }
+        }
+    };
+
+    rsx! {
+        style { {include_str!("./assets/file_upload.css")} }
+
+        input {
+            r#type: "checkbox",
+            id: "directory-upload",
+            checked: enable_directory_upload,
+            oninput: move |evt| enable_directory_upload.set(evt.checked()),
+        },
         label {
-            input {
-                r#type: "checkbox",
-                checked: "{enable_directory_upload}",
-                oninput: move |evt| {
-                    enable_directory_upload.set(evt.value().parse().unwrap());
-                },
-            },
+            r#for: "directory-upload",
             "Enable directory upload"
         }
 
@@ -27,48 +52,25 @@ fn App(cx: Scope) -> Element {
             r#type: "file",
             accept: ".txt,.rs",
             multiple: true,
-            directory: **enable_directory_upload,
-            onchange: |evt| {
-                to_owned![files_uploaded];
-                async move {
-                    if let Some(file_engine) = &evt.files() {
-                        let files = file_engine.files();
-                        for file_name in files {
-                            sleep(std::time::Duration::from_secs(1)).await;
-                            files_uploaded.write().push(file_name);
-                        }
-                    }
-                }
-            },
-        }
-        div {
-            width: "100px",
-            height: "100px",
-            border: "1px solid black",
-            prevent_default: "ondrop dragover dragenter",
-            ondrop: move |evt| {
-                to_owned![files_uploaded];
-                async move {
-                    if let Some(file_engine) = &evt.files() {
-                        let files = file_engine.files();
-                        for file_name in &files {
-                            if let Some(file) = file_engine.read_file_to_string(file_name).await{
-                                files_uploaded.write().push(file);
-                            }
-                        }
-                    }
-                }
-            },
-            ondragover: move |event: DragEvent| {
-                event.stop_propagation();
-            },
-            "Drop files here"
+            directory: enable_directory_upload,
+            onchange: upload_files,
         }
 
+        div {
+            // cheating with a little bit of JS...
+            "ondragover": "this.style.backgroundColor='#88FF88';",
+            "ondragleave": "this.style.backgroundColor='#FFFFFF';",
+
+            id: "drop-zone",
+            prevent_default: "ondrop dragover dragenter",
+            ondrop: handle_file_drop,
+            ondragover: move |event| event.stop_propagation(),
+            "Drop files here"
+        }
         ul {
             for file in files_uploaded.read().iter() {
                 li { "{file}" }
             }
         }
-    })
+    }
 }

@@ -1,26 +1,30 @@
+//! Handle async streams using use_future and awaiting the next value.
+
 use dioxus::prelude::*;
-use dioxus_signals::use_signal;
 use futures_util::{future, stream, Stream, StreamExt};
 use std::time::Duration;
 
 fn main() {
-    dioxus_desktop::launch(app);
+    launch_desktop(app);
 }
 
-fn app(cx: Scope) -> Element {
-    let count = use_signal(cx, || 10);
+fn app() -> Element {
+    let mut count = use_signal(|| 10);
 
-    use_future(cx, (), |_| async move {
+    use_future(move || async move {
+        // Create the stream.
+        // This could be a network request, a file read, or any other async operation.
         let mut stream = some_stream();
 
+        // Await the next value from the stream.
         while let Some(second) = stream.next().await {
             count.set(second);
         }
     });
 
-    cx.render(rsx! {
+    rsx! {
         h1 { "High-Five counter: {count}" }
-    })
+    }
 }
 
 fn some_stream() -> std::pin::Pin<Box<dyn Stream<Item = i32>>> {

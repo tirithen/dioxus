@@ -1,16 +1,16 @@
 //! Forms
 //!
 //! Dioxus forms deviate slightly from html, automatically returning all named inputs
-//! in the "values" field
+//! in the "values" field.
 
 use dioxus::prelude::*;
 
 fn main() {
-    dioxus_desktop::launch(app);
+    launch_desktop(app);
 }
 
-fn app(cx: Scope) -> Element {
-    cx.render(rsx! {
+fn app() -> Element {
+    rsx! {
         div {
             h1 { "Form" }
             form {
@@ -24,5 +24,5 @@ fn app(cx: Scope) -> Element {
                 button { r#type: "submit", value: "Submit", "Submit the form" }
             }
         }
-    })
+    }
 }

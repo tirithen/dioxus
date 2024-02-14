@@ -1,10 +1,10 @@
 // Run with:
 // ```bash
-// cargo run --bin server --features ssr
+// cargo run --bin server --features server
 // ```
 
 use axum_desktop::*;
-use dioxus_fullstack::prelude::*;
+use dioxus::prelude::*;
 
 #[tokio::main]
 async fn main() {
